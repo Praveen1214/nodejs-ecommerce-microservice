@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: order
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: order
+  template:
+    metadata:
+      labels:
+        app: order
+    spec:
+      containers:
+      - name: order
+        image: order-service:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 3002
+        env:
+        - name: PORT
+          value: "3002"
+        - name: RABBITMQ_URL
+          valueFrom:
+            secretKeyRef:
+              name: app-secrets
+              key: RABBITMQ_URL
+        - name: MONGODB_ORDER_URI
+          valueFrom:
+            secretKeyRef:
+              name: app-secrets
+              key: MONGODB_ORDER_URI
+        - name: JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: app-secrets
+              key: JWT_SECRET
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: order
+spec:
+  selector:
+    app: order
+  ports:
+  - port: 3002
+    targetPort: 3002

@@ -1,0 +1,44 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: auth
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: auth
+  template:
+    metadata:
+      labels:
+        app: auth
+    spec:
+      containers:
+      - name: auth
+        image: auth-service:latest # Ensure you build this image locally: docker build -t auth-service:latest ./auth
+        imagePullPolicy: IfNotPresent # Important for using local images
+        ports:
+        - containerPort: 3000
+        env:
+        - name: PORT
+          value: "3000"
+        - name: MONGODB_AUTH_URI
+          valueFrom:
+            secretKeyRef:
+              name: app-secrets
+              key: MONGODB_AUTH_URI
+        - name: JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: app-secrets
+              key: JWT_SECRET
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: auth
+spec:
+  selector:
+    app: auth
+  ports:
+  - port: 3000
+    targetPort: 3000
