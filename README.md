@@ -4,40 +4,8 @@ A microservices-based e-commerce application built with Node.js, Express, MongoD
 
 ## Architecture
 
-```
-                    ┌──────────────────────┐
-                    │     API Gateway      │
-                    │    (Port 3003)       │
-                    └──────────┬───────────┘
-                               │
-          ┌────────────────────┼────────────────────┐
-          │                    │                    │
-          ▼                    ▼                    ▼
-   ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-   │    Auth     │     │   Product   │     │    Order    │
-   │ (Port 3000) │     │ (Port 3001) │     │ (Port 3002) │
-   └──────┬──────┘     └──────┬──────┘     └──────┬──────┘
-          │                   │                    │
-          │                   └────────┬───────────┘
-          │                            │
-          │                   ┌────────▼────────┐
-          │                   │    RabbitMQ     │
-          │                   │  (Port 5672)    │
-          │                   └─────────────────┘
-          │
-   ┌──────▼──────┐
-   │   MongoDB   │
-   │   Atlas     │
-   └─────────────┘
-```
+![alt text](image.png)
 
-## Service Flow
-
-1. **User Registration/Login** → Auth Service creates user and returns JWT token
-2. **Create Product** → Product Service stores product in database (requires JWT)
-3. **Buy Product** → Product Service sends order to RabbitMQ → Order Service consumes and saves order
-
----
 
 ## Prerequisites
 
@@ -86,24 +54,7 @@ docker-compose up --build
 docker-compose down
 ```
 
-### Running Manually
 
-```bash
-# Terminal 1 - Start RabbitMQ
-docker run -d -p 5672:5672 -p 15672:15672 rabbitmq:3.8-management-alpine
-
-# Terminal 2 - Auth Service
-cd auth && npm install && npm start
-
-# Terminal 3 - Product Service
-cd product && npm install && npm start
-
-# Terminal 4 - Order Service
-cd order && npm install && npm start
-
-# Terminal 5 - API Gateway
-cd api-gateway && npm install && npm start
-```
 
 ---
 
