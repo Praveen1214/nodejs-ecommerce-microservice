@@ -8,7 +8,27 @@ class App {
   constructor() {
     this.app = express();
     this.connectDB();
+    this.setMiddlewares();
+    this.setRoutes();
     this.setupOrderConsumer();
+  }
+
+  setMiddlewares() {
+    this.app.use(express.json());
+    this.app.use(express.urlencoded({ extended: false }));
+  }
+
+  setRoutes() {
+    // Health check endpoint
+    this.app.get("/health", (req, res) => {
+      const dbStatus = mongoose.connection.readyState === 1 ? "connected" : "disconnected";
+      res.status(dbStatus === "connected" ? 200 : 503).json({
+        service: "order",
+        status: "healthy",
+        timestamp: new Date().toISOString(),
+        database: dbStatus,
+      });
+    });
   }
 
   async connectDB() {

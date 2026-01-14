@@ -32,6 +32,17 @@ class App {
   }
 
   setRoutes() {
+    // Health check endpoint
+    this.app.get("/health", (req, res) => {
+      const dbStatus = mongoose.connection.readyState === 1 ? "connected" : "disconnected";
+      res.status(dbStatus === "connected" ? 200 : 503).json({
+        service: "auth",
+        status: "healthy",
+        timestamp: new Date().toISOString(),
+        database: dbStatus,
+      });
+    });
+
     this.app.post("/login", (req, res) => this.authController.login(req, res));
     this.app.post("/register", (req, res) => this.authController.register(req, res));
     this.app.get("/dashboard", authMiddleware, (req, res) => res.json({ message: "Welcome to dashboard" }));

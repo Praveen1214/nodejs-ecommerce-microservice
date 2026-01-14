@@ -33,6 +33,17 @@ class App {
   }
 
   setRoutes() {
+    // Health check endpoint
+    this.app.get("/health", (req, res) => {
+      const dbStatus = mongoose.connection.readyState === 1 ? "connected" : "disconnected";
+      res.status(dbStatus === "connected" ? 200 : 503).json({
+        service: "product",
+        status: "healthy",
+        timestamp: new Date().toISOString(),
+        database: dbStatus,
+      });
+    });
+
     this.app.use("/api/products", productsRouter);
   }
 
