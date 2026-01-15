@@ -1,0 +1,58 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: auth
+  namespace: ecommerce-prod
+spec:
+  replicas: 1  # Scaled down for t3.small cluster
+  selector:
+    matchLabels:
+      app: auth
+      environment: production
+  template:
+    metadata:
+      labels:
+        app: auth
+        environment: production
+    spec:
+      containers:
+      - name: auth
+        image: praveen1214/auth-service:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 3000
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "100m"
+        env:
+        - name: PORT
+          value: "3000"
+        - name: NODE_ENV
+          value: "production"
+        - name: MONGODB_AUTH_URI
+          valueFrom:
+            secretKeyRef:
+              name: app-secrets
+              key: MONGODB_AUTH_URI
+        - name: JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: app-secrets
+              key: JWT_SECRET
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: auth
+  namespace: ecommerce-prod
+spec:
+  selector:
+    app: auth
+    environment: production
+  ports:
+  - port: 3000
+    targetPort: 3000

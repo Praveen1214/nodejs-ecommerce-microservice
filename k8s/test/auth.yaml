@@ -2,25 +2,37 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: auth
+  namespace: ecommerce-test
 spec:
-  replicas: 1
+  replicas: 1  # Single replica for testing
   selector:
     matchLabels:
       app: auth
+      environment: test
   template:
     metadata:
       labels:
         app: auth
+        environment: test
     spec:
       containers:
       - name: auth
-        image: auth-service:latest # Ensure you build this image locally: docker build -t auth-service:latest ./auth
+        image: praveen1214/auth-service:latest
         imagePullPolicy: Always
         ports:
         - containerPort: 3000
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "100m"
         env:
         - name: PORT
           value: "3000"
+        - name: NODE_ENV
+          value: "test"
         - name: MONGODB_AUTH_URI
           valueFrom:
             secretKeyRef:
@@ -36,9 +48,11 @@ apiVersion: v1
 kind: Service
 metadata:
   name: auth
+  namespace: ecommerce-test
 spec:
   selector:
     app: auth
+    environment: test
   ports:
   - port: 3000
     targetPort: 3000

@@ -2,36 +2,46 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: rabbitmq
+  namespace: ecommerce-prod
 spec:
   replicas: 1
   selector:
     matchLabels:
       app: rabbitmq
+      environment: production
   template:
     metadata:
       labels:
         app: rabbitmq
+        environment: production
     spec:
       containers:
       - name: rabbitmq
         image: rabbitmq:3-management
         ports:
         - containerPort: 5672
-          name: amqp
         - containerPort: 15672
-          name: management
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "200m"
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: rabbitmq
+  namespace: ecommerce-prod
 spec:
   selector:
     app: rabbitmq
+    environment: production
   ports:
-  - port: 5672
+  - name: amqp
+    port: 5672
     targetPort: 5672
-    name: amqp
-  - port: 15672
+  - name: management
+    port: 15672
     targetPort: 15672
-    name: management

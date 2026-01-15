@@ -1,0 +1,58 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: product
+  namespace: ecommerce-test
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: product
+      environment: test
+  template:
+    metadata:
+      labels:
+        app: product
+        environment: test
+    spec:
+      containers:
+      - name: product
+        image: praveen1214/product-service:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 3001
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "100m"
+        env:
+        - name: PORT
+          value: "3001"
+        - name: NODE_ENV
+          value: "test"
+        - name: MONGODB_PRODUCT_URI
+          valueFrom:
+            secretKeyRef:
+              name: app-secrets
+              key: MONGODB_PRODUCT_URI
+        - name: RABBITMQ_URL
+          valueFrom:
+            secretKeyRef:
+              name: app-secrets
+              key: RABBITMQ_URL
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: product
+  namespace: ecommerce-test
+spec:
+  selector:
+    app: product
+    environment: test
+  ports:
+  - port: 3001
+    targetPort: 3001
