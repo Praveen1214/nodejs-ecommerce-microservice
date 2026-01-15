@@ -2,7 +2,7 @@ name: Build and Deploy to AWS EKS
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "develop" ]
   workflow_dispatch:
 
 env:
@@ -68,18 +68,46 @@ jobs:
       run: |
         aws eks update-kubeconfig --name $EKS_CLUSTER_NAME --region $AWS_REGION
 
+    - name: Set Environment Variables
+      id: env-selector
+      run: |
+        if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+          echo "Creating Production Environment Configuration..."
+          echo "DEPLOY_ENV=prod" >> $GITHUB_ENV
+          echo "K8S_FOLDER=k8s/prod" >> $GITHUB_ENV
+          echo "NAMESPACE=ecommerce-prod" >> $GITHUB_ENV
+          echo "NAMESPACE_FILE=k8s/base/namespace-prod.yaml" >> $GITHUB_ENV
+        else
+          echo "Creating Test Environment Configuration..."
+          echo "DEPLOY_ENV=test" >> $GITHUB_ENV
+          echo "K8S_FOLDER=k8s/test" >> $GITHUB_ENV
+          echo "NAMESPACE=ecommerce-test" >> $GITHUB_ENV
+          echo "NAMESPACE_FILE=k8s/base/namespace-test.yaml" >> $GITHUB_ENV
+        fi
+
     - name: Update Image Names in Manifests
       run: |
-        sed -i "s|image: auth-service:latest|image: $DOCKER_USERNAME/auth-service:$IMAGE_TAG|g" k8s/auth.yaml
-        sed -i "s|image: order-service:latest|image: $DOCKER_USERNAME/order-service:$IMAGE_TAG|g" k8s/order.yaml
-        sed -i "s|image: product-service:latest|image: $DOCKER_USERNAME/product-service:$IMAGE_TAG|g" k8s/product.yaml
-        sed -i "s|image: api-gateway-service:latest|image: $DOCKER_USERNAME/api-gateway-service:$IMAGE_TAG|g" k8s/api-gateway.yaml
+        # Update images in the selected environment folder
+        # Using a loop to handle all yaml files in the target directory
+        for file in ${{ env.K8S_FOLDER }}/*.yaml; do
+          if [ -f "$file" ]; then
+            sed -i "s|image: praveen1214/auth-service:latest|image: $DOCKER_USERNAME/auth-service:$IMAGE_TAG|g" "$file"
+            sed -i "s|image: praveen1214/order-service:latest|image: $DOCKER_USERNAME/order-service:$IMAGE_TAG|g" "$file"
+            sed -i "s|image: praveen1214/product-service:latest|image: $DOCKER_USERNAME/product-service:$IMAGE_TAG|g" "$file"
+            sed -i "s|image: praveen1214/api-gateway-service:latest|image: $DOCKER_USERNAME/api-gateway-service:$IMAGE_TAG|g" "$file"
+            echo "Updated images in $file"
+          fi
+        done
 
     - name: Deploy to Kubernetes
       run: |
-        kubectl apply -f k8s/secrets.yaml
-        kubectl apply -f k8s/rabbitmq.yaml
-        kubectl apply -f k8s/auth.yaml
-        kubectl apply -f k8s/order.yaml
-        kubectl apply -f k8s/product.yaml
-        kubectl apply -f k8s/api-gateway.yaml
+        echo "Deploying to ${{ env.DEPLOY_ENV }} environment..."
+        
+        # Apply Namespace first
+        kubectl apply -f ${{ env.NAMESPACE_FILE }}
+        
+        # Apply manifests from the specific environment folder
+        kubectl apply -f ${{ env.K8S_FOLDER }}/
+        
+        # Explicitly wait for rollout (optional but good practice)
+        # kubectl rollout status deployment/api-gateway -n ${{ env.NAMESPACE }}
