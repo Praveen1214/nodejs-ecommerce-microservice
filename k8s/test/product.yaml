@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
       - name: product
-        image: praveen1214/product-service:latest
+        image: praveen1214/product-service:6839def
         imagePullPolicy: Always
         ports:
         - containerPort: 3001
