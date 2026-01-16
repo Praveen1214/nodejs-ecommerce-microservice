@@ -5,7 +5,11 @@ on:
     branches: [ "main", "develop" ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 env:
+
   DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
 
 jobs:
