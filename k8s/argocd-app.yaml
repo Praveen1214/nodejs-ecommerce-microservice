@@ -1,0 +1,20 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: ecommerce-microservices
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Praveen1214/nodejs-ecommerce-microservice.git
+    targetRevision: main
+    path: k8s/test
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: ecommerce-test
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+    - CreateNamespace=true

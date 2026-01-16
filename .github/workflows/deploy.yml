@@ -7,9 +7,8 @@ on:
 
 env:
   DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
-  AWS_REGION: ap-south-1
-  EKS_CLUSTER_NAME: k8s-research-cluster
-  IMAGE_TAG: latest
+  # Using the commit SHA as the tag ensures every build is unique and ArgoCD detects changes
+  IMAGE_TAG: ${GITHUB_SHA::7}
 
 jobs:
   build-and-push:
@@ -51,63 +50,37 @@ jobs:
         push: true
         tags: ${{ secrets.DOCKER_USERNAME }}/api-gateway-service:${{ env.IMAGE_TAG }}
 
-  deploy-to-eks:
+  update-manifests:
     needs: build-and-push
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-
-    - name: Configure AWS Credentials
-      uses: aws-actions/configure-aws-credentials@v4
       with:
-        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        aws-region: ${{ env.AWS_REGION }}
+        # Necessary to push changes back
+        token: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Update kubeconfig for EKS
-      run: |
-        aws eks update-kubeconfig --name $EKS_CLUSTER_NAME --region $AWS_REGION
-
-    - name: Set Environment Variables
-      id: env-selector
+    - name: Set Environment Folders
       run: |
         if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
-          echo "Creating Production Environment Configuration..."
-          echo "DEPLOY_ENV=prod" >> $GITHUB_ENV
           echo "K8S_FOLDER=k8s/prod" >> $GITHUB_ENV
-          echo "NAMESPACE=ecommerce-prod" >> $GITHUB_ENV
-          echo "NAMESPACE_FILE=k8s/base/namespace-prod.yaml" >> $GITHUB_ENV
         else
-          echo "Creating Test Environment Configuration..."
-          echo "DEPLOY_ENV=test" >> $GITHUB_ENV
           echo "K8S_FOLDER=k8s/test" >> $GITHUB_ENV
-          echo "NAMESPACE=ecommerce-test" >> $GITHUB_ENV
-          echo "NAMESPACE_FILE=k8s/base/namespace-test.yaml" >> $GITHUB_ENV
         fi
 
-    - name: Update Image Names in Manifests
+    - name: Update Image Tags in Manifests
       run: |
-        # Update images in the selected environment folder
-        # Using a loop to handle all yaml files in the target directory
-        for file in ${{ env.K8S_FOLDER }}/*.yaml; do
-          if [ -f "$file" ]; then
-            sed -i "s|image: praveen1214/auth-service:latest|image: $DOCKER_USERNAME/auth-service:$IMAGE_TAG|g" "$file"
-            sed -i "s|image: praveen1214/order-service:latest|image: $DOCKER_USERNAME/order-service:$IMAGE_TAG|g" "$file"
-            sed -i "s|image: praveen1214/product-service:latest|image: $DOCKER_USERNAME/product-service:$IMAGE_TAG|g" "$file"
-            sed -i "s|image: praveen1214/api-gateway-service:latest|image: $DOCKER_USERNAME/api-gateway-service:$IMAGE_TAG|g" "$file"
-            echo "Updated images in $file"
-          fi
-        done
+        # Update the image tag in the specific environment files
+        # We replace the old tag (whatever it was) with the new commit SHA
+        sed -i "s|image: $DOCKER_USERNAME/auth-service:.*|image: $DOCKER_USERNAME/auth-service:$IMAGE_TAG|g" ${{ env.K8S_FOLDER }}/auth.yaml
+        sed -i "s|image: $DOCKER_USERNAME/order-service:.*|image: $DOCKER_USERNAME/order-service:$IMAGE_TAG|g" ${{ env.K8S_FOLDER }}/order.yaml
+        sed -i "s|image: $DOCKER_USERNAME/product-service:.*|image: $DOCKER_USERNAME/product-service:$IMAGE_TAG|g" ${{ env.K8S_FOLDER }}/product.yaml
+        sed -i "s|image: $DOCKER_USERNAME/api-gateway-service:.*|image: $DOCKER_USERNAME/api-gateway-service:$IMAGE_TAG|g" ${{ env.K8S_FOLDER }}/api-gateway.yaml
 
-    - name: Deploy to Kubernetes
+    - name: Commit and Push Changes
       run: |
-        echo "Deploying to ${{ env.DEPLOY_ENV }} environment..."
-        
-        # Apply Namespace first
-        kubectl apply -f ${{ env.NAMESPACE_FILE }}
-        
-        # Apply manifests from the specific environment folder
-        kubectl apply -f ${{ env.K8S_FOLDER }}/
-        
-        # Explicitly wait for rollout (optional but good practice)
-        # kubectl rollout status deployment/api-gateway -n ${{ env.NAMESPACE }}
+        git config --global user.name "github-actions[bot]"
+        git config --global user.email "github-actions[bot]@users.noreply.github.com"
+        git add ${{ env.K8S_FOLDER }}/*.yaml
+        git commit -m "chore: update image tags to $IMAGE_TAG [skip ci]" || echo "No changes to commit"
+        git push
+

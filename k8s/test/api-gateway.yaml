@@ -4,7 +4,7 @@ metadata:
   name: api-gateway
   namespace: ecommerce-test
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
       app: api-gateway
