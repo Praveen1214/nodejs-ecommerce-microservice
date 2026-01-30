@@ -4,7 +4,7 @@ metadata:
   name: api-gateway
   namespace: ecommerce-test
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
       app: api-gateway
@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
       - name: api-gateway
-        image: praveen1214/api-gateway-service:latest
+        image: praveen1214/api-gateway-service:d572329
         imagePullPolicy: Always
         ports:
         - containerPort: 3003
