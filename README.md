@@ -1,171 +1,165 @@
-# Node.js E-Commerce Microservices
+# proactive-autoscaler-for-kubernetes-local-test-setup
 
-A microservices-based e-commerce application built with Node.js, Express, MongoDB, and RabbitMQ.
+A scalable, microservices-based e-commerce application built with Node.js, Express, MongoDB, and RabbitMQ. This project demonstrates a modern event-driven architecture deployable on Kubernetes.
 
-## Architecture
+## 🏗️ Architecture
 
-![alt text](image.png)
+![Architecture Ecosystem](Architecture.png)
 
-
-## Prerequisites
-
-- Node.js (v16+)
-- Docker & Docker Compose
-- MongoDB Atlas Account
+The application consists of the following microservices:
+- **API Gateway**: Entry point for all client requests. routes traffic to appropriate services.
+- **Auth Service**: Manages user authentication and JWT generation.
+- **Product Service**: Manages product catalog and inventory.
+- **Order Service**: Handles order creation and processing.
+- **RabbitMQ**: Asynchronous message broker for inter-service communication (e.g., Order creation -> Inventory update).
+- **MongoDB**: Dedicated database instances for each service.
 
 ---
 
-## Environment Setup
+## 🚀 Getting Started
 
-Create `.env` files for each service:
+### Prerequisites
+Ensure you have the following installed:
+- [Node.js](https://nodejs.org/) (v16+)
+- [Docker & Docker Compose](https://www.docker.com/products/docker-desktop)
+- [Kubectl](https://kubernetes.io/docs/tasks/tools/)
+- [Kind](https://kind.sigs.k8s.io/docs/user/quick-start/) (For local Kubernetes cluster)
 
-**./auth/.env**
-```
-MONGODB_AUTH_URI=mongodb+srv://<user>:<pass>@<cluster>.mongodb.net/auth_db
-JWT_SECRET=your_jwt_secret
-```
-
-**./product/.env**
-```
-MONGODB_AUTH_URI=mongodb+srv://<user>:<pass>@<cluster>.mongodb.net/auth_db
-JWT_SECRET=your_jwt_secret
-MONGODB_PRODUCT_URI=mongodb+srv://<user>:<pass>@<cluster>.mongodb.net/product_db
-```
-
-**./order/.env**
-```
-MONGODB_AUTH_URI=mongodb+srv://<user>:<pass>@<cluster>.mongodb.net/auth_db
-JWT_SECRET=your_jwt_secret
-MONGODB_PRODUCT_URI=mongodb+srv://<user>:<pass>@<cluster>.mongodb.net/product_db
-MONGODB_ORDER_URI=mongodb+srv://<user>:<pass>@<cluster>.mongodb.net/order_db
+### 1. Repository Setup
+Clone the repository:
+```bash
+git clone https://github.com/Praveen1214/nodejs-ecommerce-microservice.git
+cd nodejs-ecommerce-microservice
 ```
 
 ---
 
-## Running Locally
+## 💻 Running Locally (Docker Compose)
+The easiest way to stand up the environment for development.
 
-### Using Docker Compose
+1. **Setup Environment Variables**:
+   Create `.env` files for `auth`, `product`, and `order` keys (see `env.example` or below).
 
-```bash
-# Start all services
-docker-compose up --build
+2. **Start Services**:
+   ```bash
+   docker-compose up --build
+   ```
+   The API Gateway will be available at `http://localhost:3003`.
 
-# Stop all services
-docker-compose down
-```
-
-
-
----
-
-## API Endpoints
-
-All requests go through the **API Gateway** at `http://localhost:3003`
-
-### Auth Service
-
-| Method | Endpoint | Description | Auth Required |
-|--------|----------|-------------|---------------|
-| POST | `http://localhost:3003/auth/register` | Register new user | No |
-| POST | `http://localhost:3003/auth/login` | Login and get JWT token | No |
-| GET | `http://localhost:3003/auth/dashboard` | Access dashboard | Yes |
-
-### Product Service
-
-| Method | Endpoint | Description | Auth Required |
-|--------|----------|-------------|---------------|
-| GET | `http://localhost:3003/products/api/products` | Get all products | Yes |
-| POST | `http://localhost:3003/products/api/products` | Create new product | Yes |
-| POST | `http://localhost:3003/products/api/products/buy` | Buy products (creates order) | Yes |
+3. **Stop Services**:
+   ```bash
+   docker-compose down
+   ```
 
 ---
 
-## API Usage Examples
+## ☸️ Running on Local Kubernetes Cluster
+Follow these steps to set up a local Kubernetes cluster using **Kind**.
 
-### 1. Register a User
-
+### 1. Create Cluster
+We have provided a Kind configuration.
 ```bash
-curl -X POST http://localhost:3003/auth/register \
-  -H "Content-Type: application/json" \
-  -d '{
-    "username": "testuser",
-    "email": "test@example.com",
-    "password": "password123"
-  }'
+kind create cluster --config k8s/kind-config.yaml --name ecommerce-cluster
 ```
 
-### 2. Login
-
+### 2. Deploy Infrastructure
+Create the necessary specific namespaces:
 ```bash
-curl -X POST http://localhost:3003/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{
-    "email": "test@example.com",
-    "password": "password123"
-  }'
+# Create Test Namespace
+kubectl apply -f k8s/base/namespace-test.yaml
 ```
 
-**Response:**
-```json
-{
-  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
-}
-```
-
-### 3. Create a Product
-
+### 3. Deploy Application (Test Environment)
+Deploy all microservices and databases to the cluster:
 ```bash
-curl -X POST http://localhost:3003/products/api/products \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <YOUR_JWT_TOKEN>" \
-  -d '{
-    "name": "iPhone 15",
-    "price": 999,
-    "description": "Latest Apple iPhone"
-  }'
+kubectl apply -f k8s/test/
 ```
 
-### 4. Get All Products
-
+### 4. Verify Pods
+Wait until all pods are in `Running` state:
 ```bash
-curl -X GET http://localhost:3003/products/api/products \
-  -H "Authorization: Bearer <YOUR_JWT_TOKEN>"
+kubectl get pods -n ecommerce-test -w
 ```
+*(Press `Ctrl+C` to exit watch mode when all are ready)*
 
-### 5. Buy Products
-
+### 5. Access the Application
+Since we are using a local cluster, use `port-forward` to access the API Gateway:
 ```bash
-curl -X POST http://localhost:3003/products/api/products/buy \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <YOUR_JWT_TOKEN>" \
-  -d '{
-    "productIds": ["product_id_1", "product_id_2"]
-  }'
+kubectl port-forward svc/api-gateway 3003:80 -n ecommerce-test
 ```
+Now access the API at **http://localhost:3003**.
 
 ---
 
-## Service Ports
+## 🤝 How to Contribute
 
-| Service | Port |
-|---------|------|
-| Auth | 3000 |
-| Product | 3001 |
-| Order | 3002 |
-| API Gateway | 3003 |
-| RabbitMQ | 5672 |
-| RabbitMQ UI | 15672 |
+We welcome contributions! Please follow these steps to contribute to the project:
+
+### 1. Fork the Project
+Click the **Fork** button at the top right of the repository page to create your own copy.
+
+### 2. Create a Feature Branch
+Clone your fork and create a new branch for your feature or fix:
+```bash
+git checkout -b feature/amazing-feature
+```
+
+### 3. Make Changes
+- Write clean, maintainable code.
+- Ensure you adhere to the existing code style.
+- Add comments where necessary.
+
+### 4. Commit Changes
+Commit your changes with a descriptive message:
+```bash
+git commit -m "feat: Add amazing feature to product service"
+```
+
+### 5. Push to Branch
+Push your changes to your forked repository:
+```bash
+git push origin feature/amazing-feature
+```
+
+### 6. Open a Pull Request
+Go to the original repository and open a Pull Request (PR) from your fork. Provide a clear description of what your changes do.
 
 ---
 
-## Testing
+## 🔍 Monitoring & Observability
+This project uses the **Kube Prometheus Stack**.
 
+### Setup
 ```bash
-npm test
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+helm repo update
+kubectl create namespace monitoring
+helm install prometheus prometheus-community/kube-prometheus-stack --namespace monitoring
+```
+
+### Access Grafana
+```bash
+kubectl port-forward svc/prometheus-grafana 3000:80 -n monitoring
+# Access at http://localhost:3000 (User: admin)
+```
+Get admin password:
+```bash
+kubectl get secret --namespace monitoring prometheus-grafana -o jsonpath="{.data.admin-password}" | base64 --decode
 ```
 
 ---
 
-## Kubernetes Deployment
-
-See [k8s/README.md](./k8s/README.md) and [AWS_DEPLOYMENT.md](./AWS_DEPLOYMENT.md) for deployment instructions.
+## 📂 Project Structure
+```
+├── api-gateway/       # API Gateway Service
+├── auth/              # Authentication Service
+├── product/           # Product Service
+├── order/             # Order Service
+├── k8s/               # Kubernetes Manifests
+│   ├── base/          # Namespaces
+│   ├── test/          # Test Environment Manifests
+│   └── kind-config.yaml # Local Cluster Config
+├── terraform/         # IaC
+├── docker-compose.yml # Docker Compose Config
+└── README.md          # Project Documentation
+```
