@@ -1,0 +1,24 @@
+prometheus:
+  prometheusSpec:
+    scrapeInterval: 15s
+    evaluationInterval: 15s
+
+    # Allow ServiceMonitors/PodMonitors from ANY namespace
+    serviceMonitorNamespaceSelector:
+      any: true
+    podMonitorNamespaceSelector:
+      any: true
+
+    # Select only objects with label release: prometheus (your CR shows this label)
+    serviceMonitorSelector:
+      matchLabels:
+        release: prometheus
+    podMonitorSelector:
+      matchLabels:
+        release: prometheus
+
+grafana:
+  enabled: true
+  adminPassword: admin
+  service:
+    type: ClusterIP
