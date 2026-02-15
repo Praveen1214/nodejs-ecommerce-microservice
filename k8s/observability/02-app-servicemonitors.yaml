@@ -4,7 +4,7 @@ metadata:
   name: sm-auth
   namespace: monitoring
   labels:
-    release: prom
+    release: prometheus
 spec:
   namespaceSelector:
     matchNames:
@@ -14,9 +14,9 @@ spec:
       app: auth
       environment: test
   endpoints:
-  - port: http
-    path: /metrics
-    interval: 15s
+    - port: http
+      path: /metrics
+      interval: 15s
 ---
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
@@ -24,7 +24,7 @@ metadata:
   name: sm-product
   namespace: monitoring
   labels:
-    release: prom
+    release: prometheus
 spec:
   namespaceSelector:
     matchNames:
@@ -34,9 +34,9 @@ spec:
       app: product
       environment: test
   endpoints:
-  - port: http
-    path: /metrics
-    interval: 15s
+    - port: http
+      path: /metrics
+      interval: 15s
 ---
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
@@ -44,7 +44,7 @@ metadata:
   name: sm-order
   namespace: monitoring
   labels:
-    release: prom
+    release: prometheus
 spec:
   namespaceSelector:
     matchNames:
@@ -54,9 +54,9 @@ spec:
       app: order
       environment: test
   endpoints:
-  - port: http
-    path: /metrics
-    interval: 15s
+    - port: http
+      path: /metrics
+      interval: 15s
 ---
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
@@ -64,7 +64,7 @@ metadata:
   name: sm-api-gateway
   namespace: monitoring
   labels:
-    release: prom
+    release: prometheus
 spec:
   namespaceSelector:
     matchNames:
@@ -74,6 +74,6 @@ spec:
       app: api-gateway
       environment: test
   endpoints:
-  - port: http
-    path: /metrics
-    interval: 15s
+    - port: http
+      path: /metrics
+      interval: 15s

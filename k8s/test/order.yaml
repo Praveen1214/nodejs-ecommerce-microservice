@@ -16,33 +16,33 @@ spec:
         environment: test
     spec:
       containers:
-      - name: order
-        image: praveen1214/order-service:d572329
-        imagePullPolicy: Always
-        ports:
-        - containerPort: 3002
-        resources:
-          requests:
-            memory: "64Mi"
-            cpu: "50m"
-          limits:
-            memory: "128Mi"
-            cpu: "100m"
-        env:
-        - name: PORT
-          value: "3002"
-        - name: NODE_ENV
-          value: "test"
-        - name: MONGODB_ORDER_URI
-          valueFrom:
-            secretKeyRef:
-              name: app-secrets
-              key: MONGODB_ORDER_URI
-        - name: RABBITMQ_URL
-          valueFrom:
-            secretKeyRef:
-              name: app-secrets
-              key: RABBITMQ_URL
+        - name: order
+          image: praveen1214/order-service:d572329
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 3002
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "50m"
+            limits:
+              memory: "128Mi"
+              cpu: "100m"
+          env:
+            - name: PORT
+              value: "3002"
+            - name: NODE_ENV
+              value: "test"
+            - name: MONGODB_ORDER_URI
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: MONGODB_ORDER_URI
+            - name: RABBITMQ_URL
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: RABBITMQ_URL
 ---
 apiVersion: v1
 kind: Service
@@ -50,10 +50,11 @@ metadata:
   name: order
   namespace: ecommerce-test
 spec:
+  type: LoadBalancer
   selector:
     app: order
     environment: test
   ports:
-  - name: http
-    port: 3002
-    targetPort: 3002
+    - name: http
+      port: 3002
+      targetPort: 3002
