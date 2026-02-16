@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
         - name: product
-          image: praveen1214/product-service:d572329
+          image: abhisheklpeiris/product-service:d572329
           imagePullPolicy: Always
           ports:
             - containerPort: 3001
@@ -28,6 +28,22 @@ spec:
             limits:
               memory: "128Mi"
               cpu: "100m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3001
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3001
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
           env:
             - name: PORT
               value: "3001"

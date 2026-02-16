@@ -4,7 +4,7 @@ metadata:
   name: api-gateway
   namespace: ecommerce-prod
 spec:
-  replicas: 1  # Scaled down for t3.small cluster
+  replicas: 1 # Scaled down for t3.small cluster
   selector:
     matchLabels:
       app: api-gateway
@@ -16,34 +16,50 @@ spec:
         environment: production
     spec:
       containers:
-      - name: api-gateway
-        image: praveen1214/api-gateway-service:latest
-        imagePullPolicy: Always
-        ports:
-        - containerPort: 3003
-        resources:
-          requests:
-            memory: "64Mi"
-            cpu: "50m"
-          limits:
-            memory: "128Mi"
-            cpu: "100m"
-        env:
-        - name: PORT
-          value: "3003"
-        - name: NODE_ENV
-          value: "production"
-        - name: AUTH_SERVICE_URL
-          value: "http://auth:3000"
-        - name: PRODUCT_SERVICE_URL
-          value: "http://product:3001"
-        - name: ORDER_SERVICE_URL
-          value: "http://order:3002"
-        - name: JWT_SECRET
-          valueFrom:
-            secretKeyRef:
-              name: app-secrets
-              key: JWT_SECRET
+        - name: api-gateway
+          image: abhisheklpeiris/api-gateway-service:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 3003
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "50m"
+            limits:
+              memory: "128Mi"
+              cpu: "100m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3003
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3003
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          env:
+            - name: PORT
+              value: "3003"
+            - name: NODE_ENV
+              value: "production"
+            - name: AUTH_SERVICE_URL
+              value: "http://auth:3000"
+            - name: PRODUCT_SERVICE_URL
+              value: "http://product:3001"
+            - name: ORDER_SERVICE_URL
+              value: "http://order:3002"
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: JWT_SECRET
 ---
 apiVersion: v1
 kind: Service
@@ -56,5 +72,5 @@ spec:
     app: api-gateway
     environment: production
   ports:
-  - port: 80
-    targetPort: 3003
+    - port: 80
+      targetPort: 3003

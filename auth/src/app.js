@@ -140,8 +140,8 @@ class App {
      SERVER START
   ---------------------------------------------------- */
   start() {
-    this.server = this.app.listen(3000, () =>
-      console.log("Auth service started on port 3000")
+    this.server = this.app.listen(config.port, () =>
+      console.log(`Auth service started on port ${config.port}`)
     );
   }
 
