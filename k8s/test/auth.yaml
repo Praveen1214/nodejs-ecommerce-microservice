@@ -4,7 +4,7 @@ metadata:
   name: auth
   namespace: ecommerce-test
 spec:
-  replicas: 1  # Single replica for testing
+  replicas: 1 # Single replica for testing
   selector:
     matchLabels:
       app: auth
@@ -49,10 +49,15 @@ kind: Service
 metadata:
   name: auth
   namespace: ecommerce-test
+  labels:
+    app: auth
+    environment: test
 spec:
+  type: LoadBalancer
   selector:
     app: auth
     environment: test
   ports:
-  - port: 3000
-    targetPort: 3000
+    - name: http
+      port: 3000
+      targetPort: 3000

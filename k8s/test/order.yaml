@@ -49,10 +49,15 @@ kind: Service
 metadata:
   name: order
   namespace: ecommerce-test
+  labels:
+    app: order
+    environment: test
 spec:
+  type: LoadBalancer
   selector:
     app: order
     environment: test
   ports:
-  - port: 3002
-    targetPort: 3002
+    - name: http
+      port: 3002
+      targetPort: 3002
