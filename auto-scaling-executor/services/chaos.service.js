@@ -14,7 +14,15 @@ class ChaosService {
    *  - Chaos Mesh installed in the cluster
    *  - infra/chaos/pod-failure-template.yaml present
    */
-  async injectPodFailure(deployment) {
+  async injectPodFailure(deployment, namespace) {
+    // Check if chaos is enabled
+    if (process.env.ENABLE_CHAOS !== "true") {
+      console.log("⏭️  Chaos testing disabled (ENABLE_CHAOS=false)");
+      return { success: false, skipped: true };
+    }
+
+    const ns = namespace || process.env.K8S_NAMESPACE || "ecommerce-test";
+
     try {
       const templatePath = path.join(
         process.cwd(),
@@ -25,6 +33,7 @@ class ChaosService {
 
       let yaml = fs.readFileSync(templatePath, "utf8");
       yaml = yaml.replace(/{{DEPLOYMENT}}/g, deployment);
+      yaml = yaml.replace(/{{NAMESPACE}}/g, ns);
 
       const tempFile = path.join(
         process.cwd(),
@@ -47,9 +56,10 @@ class ChaosService {
   /**
    * Delete PodChaos for given deployment (if exists)
    */
-  async deleteChaos(deployment) {
+  async deleteChaos(deployment, namespace) {
+    const ns = namespace || process.env.K8S_NAMESPACE || "ecommerce-test";
     try {
-      const cmd = `kubectl delete podchaos pod-failure-${deployment} -n default --ignore-not-found`;
+      const cmd = `kubectl delete podchaos pod-failure-${deployment} -n ${ns} --ignore-not-found`;
       await execAsync(cmd);
       console.log(`🧹 Chaos cleared for deployment: ${deployment}`);
     } catch (err) {
