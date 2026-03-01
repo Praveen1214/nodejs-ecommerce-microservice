@@ -141,8 +141,10 @@ class ValidationOrchestrator {
       try {
         chaosInjected = true
 
+        console.log("💥 Injecting chaos")
+
         logger.info({
-          event: "CHAOS_INJECT_START",
+          event: "💥 CHAOS_INJECT_START",
           deployment,
           namespace,
         })
@@ -150,11 +152,14 @@ class ValidationOrchestrator {
         await chaosService.injectPodFailure(deployment, namespace)
 
         logger.info({
-          event: "CHAOS_INJECTED",
+          event: "💥 CHAOS_INJECTED",
           deployment,
           namespace,
           wait_ms: chaosWaitMs,
         })
+
+        // Clear the console after 5 seconds (non-blocking)
+        setTimeout(() => console.clear(), 5000)
 
         await sleep(chaosWaitMs)
 
@@ -201,10 +206,12 @@ class ValidationOrchestrator {
         }
       } finally {
         // Always clean chaos
-        try {
+          try {
           if (chaosInjected) {
+            console.log("🧹 Cleaning chaos")
+
             logger.info({
-              event: "CHAOS_DELETE_START",
+              event: "🧹 CHAOS_DELETE_START",
               deployment,
               namespace,
             })
@@ -212,7 +219,7 @@ class ValidationOrchestrator {
             await chaosService.deleteChaos(deployment, namespace)
 
             logger.info({
-              event: "CHAOS_DELETED",
+              event: "🧹 CHAOS_DELETED",
               deployment,
               namespace,
               stabilization_wait_ms: stabilizationWaitMs,
@@ -222,7 +229,7 @@ class ValidationOrchestrator {
           }
         } catch (cleanupErr) {
           logger.error({
-            event: "CHAOS_DELETE_FAILED",
+            event: "🧹 CHAOS_DELETE_FAILED",
             deployment,
             namespace,
             error: cleanupErr.message,
