@@ -2,6 +2,7 @@
 
 import express from "express"
 import ScalingService from "../services/scaling.service.js"
+import { emitScalingEvent } from "../realtime/alert.publisher.js"
 
 const router = express.Router()
 
@@ -45,6 +46,13 @@ router.post("/scale-with-metrics", async (req, res) => {
           scale_action: svc.scale_action || "scale_up",
         })
 
+        // Emit socket event for each result
+        try {
+          emitScalingEvent(result)
+        } catch (e) {
+          // socket may not be initialized in some environments; swallow
+        }
+
         results.push(result)
       }
 
@@ -63,6 +71,13 @@ router.post("/scale-with-metrics", async (req, res) => {
       metrics: body.metrics || {},
       scale_action: body.scale_action || "scale_up",
     })
+
+    // Emit socket event for single result
+    try {
+      emitScalingEvent(result)
+    } catch (e) {
+      // socket may not be initialized in some environments; swallow
+    }
 
     return res.status(200).json({
       mode: ScalingService.getMode(),
