@@ -1,5 +1,7 @@
 const express = require("express");
 const mongoose = require("mongoose");
+const client = require("prom-client");
+
 const config = require("./config");
 const MessageBroker = require("./utils/messageBroker");
 const productsRouter = require("./routes/productRoutes");
@@ -8,12 +10,110 @@ require("dotenv").config();
 class App {
   constructor() {
     this.app = express();
+
+    this.initializeMetrics();   // 🔥 Add metrics first
     this.connectDB();
     this.setMiddlewares();
     this.setRoutes();
     this.setupMessageBroker();
   }
 
+  /* ---------------------------------------------------
+     METRICS SETUP
+  ---------------------------------------------------- */
+  initializeMetrics() {
+    this.register = new client.Registry();
+
+    // Default Node.js metrics
+    client.collectDefaultMetrics({
+      register: this.register,
+      prefix: "nodejs_"
+    });
+
+    // HTTP latency histogram
+    this.httpRequestDurationMs = new client.Histogram({
+      name: "http_request_duration_ms",
+      help: "HTTP request duration in ms",
+      labelNames: ["method", "route", "status_code", "service_name"],
+      buckets: [10, 25, 50, 100, 200, 500, 1000, 2000]
+    });
+
+    // HTTP error counter
+    this.httpErrorCounter = new client.Counter({
+      name: "http_error_total",
+      help: "Total HTTP errors",
+      labelNames: ["route", "status_code", "service_name"]
+    });
+
+    // Business metrics
+    this.productCreatedCounter = new client.Counter({
+      name: "product_created_total",
+      help: "Total products created",
+      labelNames: ["service_name"]
+    });
+
+    this.productUpdatedCounter = new client.Counter({
+      name: "product_updated_total",
+      help: "Total products updated",
+      labelNames: ["service_name"]
+    });
+
+    // RabbitMQ publish counter
+    this.rabbitPublishedCounter = new client.Counter({
+      name: "rabbitmq_messages_published_total",
+      help: "Total RabbitMQ messages published",
+      labelNames: ["exchange", "service_name"]
+    });
+
+    // RabbitMQ processing latency
+    this.rabbitProcessingDuration = new client.Histogram({
+      name: "rabbitmq_processing_duration_ms",
+      help: "Time taken to process RabbitMQ message",
+      labelNames: ["queue", "service_name"],
+      buckets: [10, 50, 100, 200, 500, 1000]
+    });
+
+    // Register metrics
+    this.register.registerMetric(this.httpRequestDurationMs);
+    this.register.registerMetric(this.httpErrorCounter);
+    this.register.registerMetric(this.productCreatedCounter);
+    this.register.registerMetric(this.productUpdatedCounter);
+    this.register.registerMetric(this.rabbitPublishedCounter);
+    this.register.registerMetric(this.rabbitProcessingDuration);
+
+    // Middleware to track HTTP
+    this.app.use((req, res, next) => {
+      const end = this.httpRequestDurationMs.startTimer({
+        method: req.method,
+        route: req.path,
+        service_name: "product"
+      });
+
+      res.on("finish", () => {
+        end({ status_code: res.statusCode });
+
+        if (res.statusCode >= 400) {
+          this.httpErrorCounter.inc({
+            route: req.path,
+            status_code: res.statusCode,
+            service_name: "product"
+          });
+        }
+      });
+
+      next();
+    });
+
+    // Metrics endpoint
+    this.app.get("/metrics", async (req, res) => {
+      res.set("Content-Type", this.register.contentType);
+      res.end(await this.register.metrics());
+    });
+  }
+
+  /* ---------------------------------------------------
+     DATABASE
+  ---------------------------------------------------- */
   async connectDB() {
     await mongoose.connect(config.mongoURI, {
       useNewUrlParser: true,
@@ -27,15 +127,26 @@ class App {
     console.log("MongoDB disconnected");
   }
 
+  /* ---------------------------------------------------
+     MIDDLEWARES
+  ---------------------------------------------------- */
   setMiddlewares() {
     this.app.use(express.json());
     this.app.use(express.urlencoded({ extended: false }));
   }
 
+  /* ---------------------------------------------------
+     ROUTES
+  ---------------------------------------------------- */
   setRoutes() {
-    // Health check endpoint
+
+    // Health check
     this.app.get("/health", (req, res) => {
-      const dbStatus = mongoose.connection.readyState === 1 ? "connected" : "disconnected";
+      const dbStatus =
+        mongoose.connection.readyState === 1
+          ? "connected"
+          : "disconnected";
+
       res.status(dbStatus === "connected" ? 200 : 503).json({
         service: "product",
         status: "healthy",
@@ -44,16 +155,46 @@ class App {
       });
     });
 
-    this.app.use("/api/products", productsRouter);
+    // Wrap router to capture business metrics
+    this.app.use("/api/products", (req, res, next) => {
+      if (req.method === "POST") {
+        this.productCreatedCounter.inc({ service_name: "product" });
+      }
+
+      if (req.method === "PUT" || req.method === "PATCH") {
+        this.productUpdatedCounter.inc({ service_name: "product" });
+      }
+
+      next();
+    }, productsRouter);
   }
 
+  /* ---------------------------------------------------
+     MESSAGE BROKER
+  ---------------------------------------------------- */
   setupMessageBroker() {
+    const startTimer = this.rabbitProcessingDuration.startTimer({
+      queue: config.queueName,
+      service_name: "product"
+    });
+
     MessageBroker.connect();
+
+    // increment publish counter example
+    this.rabbitPublishedCounter.inc({
+      exchange: config.exchangeName,
+      service_name: "product"
+    });
+
+    startTimer();
   }
 
+  /* ---------------------------------------------------
+     START SERVER
+  ---------------------------------------------------- */
   start() {
-    this.server = this.app.listen(3001, () =>
-      console.log("Server started on port 3001")
+    this.server = this.app.listen(config.port, () =>
+      console.log(`Product service started on port ${config.port}`)
     );
   }
 

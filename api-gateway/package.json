@@ -12,6 +12,7 @@
   "license": "ISC",
   "dependencies": {
     "express": "^4.18.2",
-    "http-proxy": "^1.18.1"
+    "http-proxy": "^1.18.1",
+    "prom-client": "^15.1.3"
   }
 }
