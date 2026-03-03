@@ -95,4 +95,43 @@ router.get("/resilience-metrics/stream", async (req, res) => {
     });
 });
 
+/**
+ * GET /api/v1/deployment-status/stream
+ * Streams live status (replicas, CPU, Mem) for all deployments.
+ */
+router.get("/deployment-status/stream", async (req, res) => {
+    setupSSE(res);
+    console.log("🔌 SSE Client connected to /deployment-status/stream");
+
+    try {
+        // Initial state: Get latest status for each unique deployment
+        const latestStatuses = await ScalingLog.aggregate([
+            { $sort: { timestamp: -1 } },
+            {
+                $group: {
+                    _id: "$deployment",
+                    latest: { $first: "$$ROOT" }
+                }
+            }
+        ]);
+
+        latestStatuses.forEach(item => {
+            res.write(`data: ${JSON.stringify(item.latest)}\n\n`);
+        });
+    } catch (err) {
+        console.error("❌ Error fetching deployment statuses:", err.message);
+    }
+
+    const onScalingLogged = (savedLog) => {
+        // Broadcast every scaling event as a status update
+        res.write(`data: ${JSON.stringify(savedLog)}\n\n`);
+    };
+
+    eventEmitter.on("scaling:logged", onScalingLogged);
+    req.on("close", () => {
+        eventEmitter.removeListener("scaling:logged", onScalingLogged);
+        res.end();
+    });
+});
+
 export default router;
