@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
       - name: auth
-        image: praveen1214/auth-service:6e2cf4e
+        image: praveen1214/auth-service:65c5988
         imagePullPolicy: Always
         ports:
         - containerPort: 3000
