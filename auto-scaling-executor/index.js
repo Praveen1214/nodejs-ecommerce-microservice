@@ -4,6 +4,7 @@ dotenv.config();
 
 import express from "express";
 import http from "http";
+import cors from "cors";
 import { initSocket } from "./realtime/socket.js";
 import connectDB from "./db/mongodb.js";
 
@@ -11,15 +12,18 @@ import connectDB from "./db/mongodb.js";
 import scaleRoutes from "./api/scale.controller.js";
 import scaleMetricsRoutes from "./api/scale-with-metrics.controller.js";
 import scalingLogsRoutes from "./api/scaling-logs.controller.js";
+import alertsRoutes from "./api/alerts.controller.js";
 
 console.log("EXECUTION_MODE =", process.env.EXECUTION_MODE);
 
 const app = express();
+app.use(cors());
 app.use(express.json());
 
 app.use("/api/v1", scaleRoutes);
 app.use("/api/v1", scaleMetricsRoutes);
 app.use("/api/v1", scalingLogsRoutes);
+app.use("/api/v1", alertsRoutes);
 
 const server = http.createServer(app);
 initSocket(server);
