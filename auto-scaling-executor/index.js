@@ -5,6 +5,7 @@ dotenv.config();
 import express from "express";
 import http from "http";
 import { initSocket } from "./realtime/socket.js";
+import connectDB from "./db/mongodb.js";
 
 // IMPORTS MUST COME AFTER dotenv.config
 import scaleRoutes from "./api/scale.controller.js";
@@ -20,6 +21,7 @@ app.use("/api/v1", scaleMetricsRoutes);
 
 const server = http.createServer(app);
 initSocket(server);
+connectDB();
 
 server.listen(6000, () => {
   console.log("Auto Scaling Executor running on port 6000");
