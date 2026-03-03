@@ -1,14 +1,14 @@
 apiVersion: chaos-mesh.org/v1alpha1
 kind: PodChaos
 metadata:
-  name: pod-failure-{{DEPLOYMENT}}
-  namespace: {{NAMESPACE}}
+  name: pod-failure-order
+  namespace: ecommerce-test
 spec:
   action: pod-kill
   mode: one
   selector:
     namespaces:
-      - {{NAMESPACE}}
+      - ecommerce-test
     labelSelectors:
-      app: {{DEPLOYMENT}}
+      app: order
   duration: "20s"

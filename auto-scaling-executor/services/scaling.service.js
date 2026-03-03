@@ -4,11 +4,60 @@ import LocalScaler from "./local-scaler.service.js"
 import K8sExecutor from "./k8s-executor.service.js"
 import MetricsService from "./metrics.service.js"
 import ChaosService from "./chaos.service.js"
+import LoggingService from "./logging.service.js"
 
 class ScalingService {
   constructor() {
     this.RESILIENCE_THRESHOLD = Number(process.env.RESILIENCE_THRESHOLD || 0.7)
     this.CHAOS_WAIT_MS = Number(process.env.CHAOS_WAIT_MS || 10000) // 10s default
+  }
+
+  // Getter that reads from process.env each time (not cached)
+  get AUTO_PROMOTE_TO_PROD() {
+    return process.env.AUTO_PROMOTE_TO_PROD === "true"
+  }
+
+  get TEST_NAMESPACE() {
+    return process.env.TEST_NAMESPACE || process.env.K8S_NAMESPACE || "ecommerce-test"
+  }
+
+  get PROD_NAMESPACE() {
+    return process.env.PROD_NAMESPACE || "ecommerce-prod"
+  }
+
+  /**
+   * Auto-promote test scaling to production
+   * Scales the same deployment in prod to match the final replica count in test
+   */
+  async promoteToProduction(deployment, finalReplicas) {
+    console.log(`📋 Auto-promotion check: AUTO_PROMOTE_TO_PROD=${this.AUTO_PROMOTE_TO_PROD}`)
+
+    if (!this.AUTO_PROMOTE_TO_PROD) {
+      return { promoted: false, reason: "AUTO_PROMOTE_TO_PROD disabled" }
+    }
+
+    try {
+      console.log(`🚀 Auto-promoting ${deployment} to production (${finalReplicas} replicas)...`)
+
+      // Scale prod deployment to same replica count
+      const result = await K8sExecutor.scaleDeployment(deployment, finalReplicas, this.PROD_NAMESPACE)
+
+      if (result.status === "SUCCESS") {
+        console.log(`✅ Production scaled: ${deployment} -> ${finalReplicas} replicas`)
+        return {
+          promoted: true,
+          deployment,
+          namespace: this.PROD_NAMESPACE,
+          replicas: finalReplicas,
+          previous_replicas: result.previous_replicas,
+        }
+      }
+
+      return { promoted: false, reason: result.error || "Scaling failed" }
+    } catch (err) {
+      console.error(`❌ Auto-promotion failed: ${err.message}`)
+      return { promoted: false, reason: err.message }
+    }
   }
 
   getMode() {
@@ -85,6 +134,7 @@ class ScalingService {
 
     // If NO metrics → just scale directly (no validation)
     if (!hasMetrics) {
+      const namespace = process.env.K8S_NAMESPACE || "ecommerce-test"
       const previousReplicas = await K8sExecutor.getCurrentReplicas(deployment)
       const baseResult =
         mode === "K8S"
@@ -92,7 +142,13 @@ class ScalingService {
           : LocalScaler.simulateScaling(deployment, additionalPods)
 
       if (baseResult.status === "SUCCESS") {
-        return {
+        // Auto-promote to production if enabled and in test namespace
+        let productionPromotion = null
+        if (mode === "K8S" && namespace === this.TEST_NAMESPACE) {
+          productionPromotion = await this.promoteToProduction(deployment, baseResult.required_replicas)
+        }
+
+        const result = {
           deployment,
           request_pods,
           scale_action: scale_action,
@@ -102,6 +158,7 @@ class ScalingService {
           required_replicas: previousReplicas + additionalPods,
           status: "SUCCESS_NO_VALIDATION",
           message: "Scaled successfully (no metrics provided, validation skipped)",
+          production_promotion: productionPromotion,
           validation: {
             passed: null,
             rolledBack: false,
@@ -109,9 +166,14 @@ class ScalingService {
             reason: "No metrics in request body",
           },
         }
+
+        // --- MONGODB LOGGING ---
+        await LoggingService.logScalingResult(result)
+
+        return result
       }
 
-      return {
+      const result = {
         ...baseResult,
         request_pods,
         scale_action: scale_action,
@@ -124,6 +186,11 @@ class ScalingService {
           reason: "Scaling failed before validation",
         },
       }
+
+      // --- MONGODB LOGGING ---
+      await LoggingService.logScalingResult(result)
+
+      return result
     }
 
     // ─────────────────────────────────────────
@@ -139,9 +206,10 @@ class ScalingService {
     const attemptedAdditional = baseResult.additional_replicas ?? additionalPods
 
     if (baseResult.status !== "SUCCESS") {
-      return {
+      const result = {
         ...baseResult,
         request_pods,
+        scale_action: scale_action,
         attempted_additional_replicas: attemptedAdditional,
         additional_replicas: 0,
         validation: {
@@ -151,6 +219,11 @@ class ScalingService {
           reason: "Scaling failed before validation",
         },
       }
+
+      // --- MONGODB LOGGING ---
+      await LoggingService.logScalingResult(result)
+
+      return result
     }
 
     // ─────────────────────────────────────────
@@ -158,10 +231,11 @@ class ScalingService {
     // ─────────────────────────────────────────
     const chaosEnabled = mode === "K8S"
     let chaosInjected = false
+    const namespace = process.env.K8S_NAMESPACE || "ecommerce-test"
 
     if (chaosEnabled) {
       try {
-        const { success } = await ChaosService.injectPodFailure(deployment)
+        const { success } = await ChaosService.injectPodFailure(deployment, namespace)
         chaosInjected = success
       } catch (e) {
         console.error("Chaos injection error:", e.message)
@@ -189,7 +263,7 @@ class ScalingService {
       // STEP 4 – LOCAL MODE → NO rollback, only reporting
       // ─────────────────────────────────────────
       if (mode !== "K8S") {
-        return {
+        const result = {
           deployment,
           request_pods,
           scale_action: scale_action,
@@ -210,13 +284,29 @@ class ScalingService {
             standardsUsed: MetricsService.THRESHOLDS,
           },
         }
+
+        // --- MONGODB LOGGING ---
+        await LoggingService.logScalingResult(result)
+
+        return result
       }
 
       // ─────────────────────────────────────────
       // STEP 5 – K8S MODE → PASS → keep scale
       // ─────────────────────────────────────────
       if (passed) {
-        return {
+        // Auto-promote to production if enabled and in test namespace
+        console.log(`🔍 Checking auto-promotion: namespace=${namespace}, TEST_NAMESPACE=${this.TEST_NAMESPACE}, match=${namespace === this.TEST_NAMESPACE}`)
+
+        let productionPromotion = null
+        if (namespace === this.TEST_NAMESPACE) {
+          productionPromotion = await this.promoteToProduction(deployment, baseResult.required_replicas)
+        } else {
+          console.log(`⏭️  Skipping auto-promotion (namespace mismatch)`)
+          productionPromotion = { promoted: false, reason: `Not in test namespace (current: ${namespace})` }
+        }
+
+        const result = {
           deployment,
           request_pods,
           scale_action: scale_action,
@@ -226,6 +316,7 @@ class ScalingService {
           required_replicas: baseResult.required_replicas,
           status: "SUCCESS_VALIDATED",
           message: "Scale kept – resilience validation passed",
+          production_promotion: productionPromotion,
           validation: {
             ...scoreData,
             passed: true,
@@ -237,6 +328,11 @@ class ScalingService {
             standardsUsed: MetricsService.THRESHOLDS,
           },
         }
+
+        // --- MONGODB LOGGING ---
+        await LoggingService.logScalingResult(result)
+
+        return result
       }
 
       // ─────────────────────────────────────────
@@ -244,7 +340,7 @@ class ScalingService {
       // ─────────────────────────────────────────
       await K8sExecutor.scaleDeployment(deployment, baseResult.previous_replicas)
 
-      return {
+      const result = {
         deployment,
         request_pods,
         scale_action: scale_action,
@@ -266,10 +362,15 @@ class ScalingService {
           standardsUsed: MetricsService.THRESHOLDS,
         },
       }
+
+      // --- MONGODB LOGGING ---
+      await LoggingService.logScalingResult(result)
+
+      return result
     } finally {
       // Always attempt to remove chaos if we injected it
       if (chaosEnabled && chaosInjected) {
-        await ChaosService.deleteChaos(deployment)
+        await ChaosService.deleteChaos(deployment, namespace)
       }
     }
   }
@@ -280,6 +381,7 @@ class ScalingService {
    */
   async scaleMultiple(services) {
     const mode = this.getMode()
+    const namespace = process.env.K8S_NAMESPACE || "ecommerce-test"
     const results = []
 
     for (const svc of services) {
@@ -297,7 +399,13 @@ class ScalingService {
 
         const success = baseResult.status === "SUCCESS"
 
-        results.push({
+        // Auto-promote to production if enabled and in test namespace
+        let productionPromotion = null
+        if (success && mode === "K8S" && namespace === this.TEST_NAMESPACE) {
+          productionPromotion = await this.promoteToProduction(deployment, baseResult.required_replicas)
+        }
+
+        const res = {
           deployment,
           request_pods,
           previous_replicas: baseResult.previous_replicas,
@@ -308,7 +416,16 @@ class ScalingService {
           message:
             baseResult.message ||
             (success ? "Scaled successfully" : baseResult.error || "Scaling failed"),
+          production_promotion: productionPromotion,
+        }
+
+        // --- MONGODB LOGGING ---
+        await LoggingService.logScalingResult({
+          ...res,
+          scale_action: additionalPods > 0 ? "scale_up" : "scale_down"
         })
+
+        results.push(res)
       } catch (err) {
         results.push({
           deployment: svc?.deployment,

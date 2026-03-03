@@ -8,6 +8,8 @@ const router = express.Router()
 class ScalingService {
   constructor() {
     this.mode = "K8S"
+    this.testNamespace = process.env.TEST_NAMESPACE
+    this.prodNamespace = process.env.PROD_NAMESPACE
   }
 
   getMode() {
@@ -16,7 +18,7 @@ class ScalingService {
 
   /**
    * SCALE MULTIPLE SERVICES (NO METRICS)
-   * Simple scaling without validation layer
+   * Simple scaling without validation layer (TEST namespace only)
    */
   async scaleMultiple(services = []) {
     const results = []
@@ -29,10 +31,18 @@ class ScalingService {
         throw new Error("deployment and request_pods are required")
       }
 
-      const previous = await k8sExecutor.getCurrentReplicas(deployment)
+      const previous = await k8sExecutor.getCurrentReplicas(
+        deployment,
+        this.testNamespace
+      )
+
       const additional = Math.max(requestPods - previous, 0)
 
-      const scaleResult = await k8sExecutor.scaleDeployment(deployment, requestPods)
+      const scaleResult = await k8sExecutor.scaleDeployment(
+        deployment,
+        requestPods,
+        this.testNamespace
+      )
 
       results.push({
         deployment,
@@ -43,7 +53,9 @@ class ScalingService {
         required_replicas: requestPods,
         status: scaleResult.status === "SUCCESS" ? "SUCCESS" : "FAILED",
         message:
-          scaleResult.status === "SUCCESS" ? "Scale executed without validation" : "Scale failed",
+          scaleResult.status === "SUCCESS"
+            ? "Scale executed in TEST namespace"
+            : "Scale failed",
       })
     }
 
@@ -55,7 +67,7 @@ class ScalingService {
 
   /**
    * SCALE ONE SERVICE WITH METRICS + VALIDATION + ROLLBACK
-   * THIS IS YOUR ADVANCED PATH
+   * THIS IS YOUR ADVANCED PATH (TEST → VALIDATE)
    */
   async scaleOneWithMetrics(service) {
     const { deployment, request_pods, metrics = {}, chaosTest = false } = service
@@ -64,29 +76,41 @@ class ScalingService {
       throw new Error("deployment and request_pods are required")
     }
 
-    // 1️⃣ Read current replicas
-    const previousReplicas = await k8sExecutor.getCurrentReplicas(deployment)
+    // 1️⃣ Read current replicas in TEST namespace
+    const previousReplicas = await k8sExecutor.getCurrentReplicas(
+      deployment,
+      this.testNamespace
+    )
 
-    const additionalReplicas = Math.max(request_pods - previousReplicas, 0)
+    const additionalReplicas = Math.max(
+      request_pods - previousReplicas,
+      0
+    )
 
-    // 2️⃣ Execute scale FIRST (optimistic scale)
+    // 2️⃣ Execute scale FIRST in TEST
     if (additionalReplicas > 0) {
-      await k8sExecutor.scaleDeploymentIncremental(deployment, additionalReplicas)
+      await k8sExecutor.scaleDeploymentIncremental(
+        deployment,
+        additionalReplicas,
+        this.testNamespace
+      )
     }
 
-    // 3️⃣ Run validation orchestrator
-    const validationResult = await validationOrchestrator.validateAndFinalizeScale({
-      deployment,
-      request_pods,
-      additional_replicas: additionalReplicas,
-      metrics,
-      chaosTest,
-      resilienceThreshold: 0.7,
-    })
+    // 3️⃣ Run validation
+    const validationResult =
+      await validationOrchestrator.validateAndFinalizeScale({
+        deployment,
+        request_pods,
+        additional_replicas: additionalReplicas,
+        metrics,
+        chaosTest,
+        resilienceThreshold: 0.7,
+      })
 
     logger.info({
       event: "SCALE_WITH_VALIDATION_RESULT",
       deployment,
+      namespace: this.testNamespace,
       validation: validationResult.validation,
       status: validationResult.status,
     })
@@ -105,13 +129,11 @@ router.post("/scale", async (req, res) => {
   try {
     const body = req.body
 
-    // Multi-service request
     if (Array.isArray(body.services)) {
       const result = await scalingService.scaleMultiple(body.services)
       return res.status(200).json(result)
     }
 
-    // Single service request
     const { deployment, request_pods } = body
 
     if (!deployment || !request_pods) {
@@ -120,7 +142,10 @@ router.post("/scale", async (req, res) => {
       })
     }
 
-    const result = await scalingService.scaleMultiple([{ deployment, request_pods }])
+    const result = await scalingService.scaleMultiple([
+      { deployment, request_pods },
+    ])
+
     return res.status(200).json(result)
   } catch (error) {
     logger.error({ event: "SCALE_ERROR", error: error.message })
