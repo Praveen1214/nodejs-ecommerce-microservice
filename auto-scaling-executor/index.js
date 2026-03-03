@@ -13,6 +13,7 @@ import scaleRoutes from "./api/scale.controller.js";
 import scaleMetricsRoutes from "./api/scale-with-metrics.controller.js";
 import scalingLogsRoutes from "./api/scaling-logs.controller.js";
 import alertsRoutes from "./api/alerts.controller.js";
+import alertsSSERoutes from "./api/alerts-sse.controller.js";
 
 console.log("EXECUTION_MODE =", process.env.EXECUTION_MODE);
 
@@ -24,11 +25,17 @@ app.use("/api/v1", scaleRoutes);
 app.use("/api/v1", scaleMetricsRoutes);
 app.use("/api/v1", scalingLogsRoutes);
 app.use("/api/v1", alertsRoutes);
+app.use("/api/v1", alertsSSERoutes);
 
-const server = http.createServer(app);
-initSocket(server);
-connectDB();
+const startServer = async () => {
+  await connectDB();
 
-server.listen(6000, () => {
-  console.log("Auto Scaling Executor running on port 6000");
-});
+  const server = http.createServer(app);
+  initSocket(server);
+
+  server.listen(6000, () => {
+    console.log("🚀 Auto Scaling Executor running on port 6000");
+  });
+};
+
+startServer();
