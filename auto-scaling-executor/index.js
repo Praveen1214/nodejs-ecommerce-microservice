@@ -10,6 +10,7 @@ import connectDB from "./db/mongodb.js";
 // IMPORTS MUST COME AFTER dotenv.config
 import scaleRoutes from "./api/scale.controller.js";
 import scaleMetricsRoutes from "./api/scale-with-metrics.controller.js";
+import scalingLogsRoutes from "./api/scaling-logs.controller.js";
 
 console.log("EXECUTION_MODE =", process.env.EXECUTION_MODE);
 
@@ -18,6 +19,7 @@ app.use(express.json());
 
 app.use("/api/v1", scaleRoutes);
 app.use("/api/v1", scaleMetricsRoutes);
+app.use("/api/v1", scalingLogsRoutes);
 
 const server = http.createServer(app);
 initSocket(server);

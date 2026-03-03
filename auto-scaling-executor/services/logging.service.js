@@ -1,4 +1,5 @@
 import ScalingLog from "../models/scaling-log.model.js";
+import eventEmitter from "../utils/events.js";
 
 class LoggingService {
     async logScalingResult(result) {
@@ -9,7 +10,11 @@ class LoggingService {
             }
 
             const logEntry = new ScalingLog(result);
-            await logEntry.save();
+            const savedLog = await logEntry.save();
+
+            // Emit event for real-time updates (SSE)
+            eventEmitter.emit("scaling:logged", savedLog);
+
             console.log(`✅ Scaling result stored in MongoDB for deployment: ${result.deployment} (${result.status})`);
         } catch (error) {
             console.error("❌ Failed to store scaling result in MongoDB:", error.message);
