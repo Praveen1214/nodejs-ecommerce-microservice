@@ -15,6 +15,7 @@ import scalingLogsRoutes from "./api/scaling-logs.controller.js";
 import alertsRoutes from "./api/alerts.controller.js";
 import alertsSSERoutes from "./api/alerts-sse.controller.js";
 import chaosRoutes from "./api/chaos.controller.js";
+import deploymentHealthRoutes from "./api/deployment-health.controller.js";
 
 console.log("EXECUTION_MODE =", process.env.EXECUTION_MODE);
 
@@ -28,6 +29,7 @@ app.use("/api/v1", scalingLogsRoutes);
 app.use("/api/v1", alertsRoutes);
 app.use("/api/v1", alertsSSERoutes);
 app.use("/api/v1", chaosRoutes);
+app.use("/api/v1", deploymentHealthRoutes);
 
 const startServer = async () => {
   await connectDB();
