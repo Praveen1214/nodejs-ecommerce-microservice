@@ -1,0 +1,19 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: sm-auto-scaling-executor
+  namespace: monitoring
+  labels:
+    release: prometheus
+spec:
+  namespaceSelector:
+    matchNames:
+      - ecommerce-test
+  selector:
+    matchLabels:
+      app: auto-scaling-executor
+      environment: test
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s

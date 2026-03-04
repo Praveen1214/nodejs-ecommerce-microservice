@@ -4,6 +4,23 @@ import LocalScaler from "./local-scaler.service.js"
 import K8sExecutor from "./k8s-executor.service.js"
 import MetricsService from "./metrics.service.js"
 import ChaosService from "./chaos.service.js"
+import {
+  scalingActionsTotal,
+  resilienceScore,
+  resilienceLatencyScore,
+  resilienceErrorScore,
+  resilienceTrafficScore,
+  validationResultsTotal,
+  rollbacksTotal,
+  promotionsTotal,
+  lastCpuPercent,
+  lastMemPercent,
+  lastErrorRate,
+  lastP95Latency,
+  scalingDurationMs,
+  scalingPodDelta,
+  currentPods,
+} from "./prometheus-metrics.service.js"
 
 class ScalingService {
   constructor() {
@@ -213,9 +230,27 @@ class ScalingService {
       }
 
       // ─────────────────────────────────────────
+      // Record Prometheus metrics from validation
+      // ─────────────────────────────────────────
+      resilienceScore.set({ deployment }, scoreData.score)
+      resilienceLatencyScore.set({ deployment }, scoreData.latencyScore ?? 0)
+      resilienceErrorScore.set({ deployment }, scoreData.errorScore ?? 0)
+      resilienceTrafficScore.set({ deployment }, scoreData.trafficScore ?? 0)
+      lastCpuPercent.set({ deployment }, extracted.cpuPercent ?? 0)
+      lastMemPercent.set({ deployment }, extracted.memPercent ?? 0)
+      lastErrorRate.set({ deployment }, extracted.errorRate ?? 0)
+      lastP95Latency.set({ deployment }, extracted.p95LatencyAfter ?? 0)
+      scalingPodDelta.set({ deployment }, scale_action === "scale_down" ? -attemptedAdditional : attemptedAdditional)
+      currentPods.set({ deployment }, baseResult.required_replicas ?? 0)
+
+      // ─────────────────────────────────────────
       // STEP 5 – K8S MODE → PASS → keep scale
       // ─────────────────────────────────────────
       if (passed) {
+        scalingActionsTotal.inc({ deployment, action: scale_action, status: "success" })
+        promotionsTotal.inc({ deployment })
+        validationResultsTotal.inc({ deployment, result: "passed" })
+
         return {
           deployment,
           request_pods,
@@ -242,6 +277,10 @@ class ScalingService {
       // ─────────────────────────────────────────
       // STEP 6 – K8S MODE → FAIL → rollback
       // ─────────────────────────────────────────
+      scalingActionsTotal.inc({ deployment, action: scale_action, status: "rolled_back" })
+      rollbacksTotal.inc({ deployment })
+      validationResultsTotal.inc({ deployment, result: "failed" })
+
       await K8sExecutor.scaleDeployment(deployment, baseResult.previous_replicas)
 
       return {

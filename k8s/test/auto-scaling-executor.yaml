@@ -1,0 +1,103 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: auto-scaling-executor
+  namespace: ecommerce-test
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: auto-scaling-executor
+      environment: test
+  template:
+    metadata:
+      labels:
+        app: auto-scaling-executor
+        environment: test
+    spec:
+      serviceAccountName: executor-sa
+      containers:
+      - name: auto-scaling-executor
+        image: praveen1214/auto-scaling-executor:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 6000
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+        env:
+        - name: EXECUTION_MODE
+          value: "K8S"
+        - name: K8S_NAMESPACE
+          value: "ecommerce-test"
+        - name: TARGET_SERVICE
+          value: "order"
+        - name: TARGET_DEPLOYMENT
+          value: "order"
+        - name: ML_SERVICE_URL
+          value: "http://ml-service:8000"
+        - name: SSE_URL
+          value: "http://ml-service:8000/simulation-data-stream"
+        - name: EXECUTOR_URL
+          value: "http://auto-scaling-executor:6000"
+        - name: AUTO_COLLECT
+          value: "false"
+        - name: POLL_INTERVAL_MS
+          value: "2000"
+        - name: RESILIENCE_THRESHOLD
+          value: "0.7"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: auto-scaling-executor
+  namespace: ecommerce-test
+  labels:
+    app: auto-scaling-executor
+    environment: test
+spec:
+  type: ClusterIP
+  selector:
+    app: auto-scaling-executor
+    environment: test
+  ports:
+    - name: http
+      port: 6000
+      targetPort: 6000
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: executor-sa
+  namespace: ecommerce-test
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: executor-scaling-role
+  namespace: ecommerce-test
+rules:
+- apiGroups: ["apps"]
+  resources: ["deployments", "deployments/scale"]
+  verbs: ["get", "list", "patch", "update"]
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: executor-scaling-binding
+  namespace: ecommerce-test
+subjects:
+- kind: ServiceAccount
+  name: executor-sa
+  namespace: ecommerce-test
+roleRef:
+  kind: Role
+  name: executor-scaling-role
+  apiGroup: rbac.authorization.k8s.io

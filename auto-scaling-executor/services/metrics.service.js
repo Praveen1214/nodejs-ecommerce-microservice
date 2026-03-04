@@ -46,18 +46,44 @@ class MetricsService {
   }
 
   /**
-   * Normalize raw metric payload
+   * Normalize raw metric payload.
+   * Accepts BOTH snake_case (from Feature Collector / curl) and camelCase field names.
+   * Auto-normalizes percentage values (>1) to ratios (0–1) for successRate/errorRate/trafficRecovery.
    */
   extractFromPayload(metrics = {}) {
+    // Accept both snake_case and camelCase field names
+    const rawSuccess = Number(metrics.successRate ?? metrics.success_rate ?? 0)
+    const rawError = Number(metrics.errorRate ?? metrics.error_rate ?? 0)
+    const rawLatencyBefore = Number(metrics.p95LatencyBefore ?? metrics.latency_p95_before ?? 0)
+    const rawLatencyAfter = Number(metrics.p95LatencyAfter ?? metrics.latency_p95 ?? metrics.latency_p95_after ?? 0)
+    const rawCpu = Number(metrics.cpuPercent ?? metrics.cpu_usage ?? 0)
+    const rawMem = Number(metrics.memPercent ?? metrics.memory_usage ?? 0)
+    const rawRestarts = Number(metrics.restartCount ?? metrics.restarts ?? 0)
+    const rawTraffic = Number(metrics.trafficRecovery ?? metrics.traffic_recovery_rate ?? 1)
+
+    // Auto-normalize: if values look like percentages (>1), convert to ratio (0–1)
+    // successRate thresholds are 0.95–0.99, so 97 → 0.97
+    const successRate = rawSuccess > 1 ? rawSuccess / 100 : rawSuccess
+    // errorRate thresholds are 0.001–0.05, so 2.5 → 0.025
+    const errorRate = rawError > 1 ? rawError / 100 : rawError
+    // trafficRecovery thresholds are 0.9–0.98, so 96 → 0.96
+    const trafficRecovery = rawTraffic > 1 ? rawTraffic / 100 : rawTraffic
+
+    // memPercent thresholds are 0–90 (percentage).
+    // If memory_usage is provided in MB (values > 100), convert to percentage
+    // using pod memory limit (default 1024 MB). e.g. 550 MB → 53.7%
+    const POD_MEMORY_LIMIT_MB = Number(process.env.POD_MEMORY_LIMIT_MB || 1024)
+    const memPercent = rawMem > 100 ? (rawMem / POD_MEMORY_LIMIT_MB) * 100 : rawMem
+
     return {
-      successRate: Number(metrics.successRate ?? 0),
-      errorRate: Number(metrics.errorRate ?? 0),
-      p95LatencyBefore: Number(metrics.p95LatencyBefore ?? 0),
-      p95LatencyAfter: Number(metrics.p95LatencyAfter ?? 0),
-      cpuPercent: Number(metrics.cpuPercent ?? 0),
-      memPercent: Number(metrics.memPercent ?? 0),
-      restartCount: Number(metrics.restartCount ?? 0),
-      trafficRecovery: Number(metrics.trafficRecovery ?? 1),
+      successRate,
+      errorRate,
+      p95LatencyBefore: rawLatencyBefore,
+      p95LatencyAfter: rawLatencyAfter,
+      cpuPercent: rawCpu,
+      memPercent,
+      restartCount: rawRestarts,
+      trafficRecovery,
     }
   }
 

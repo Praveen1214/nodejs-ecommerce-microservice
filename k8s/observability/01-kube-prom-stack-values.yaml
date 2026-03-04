@@ -3,11 +3,8 @@ prometheus:
     scrapeInterval: 15s
     evaluationInterval: 15s
 
-    # Allow ServiceMonitors/PodMonitors from ANY namespace
-    serviceMonitorNamespaceSelector:
-      any: true
-    podMonitorNamespaceSelector:
-      any: true
+    serviceMonitorNamespaceSelector: {}
+    podMonitorNamespaceSelector: {}
 
     # Select only objects with label release: prometheus (your CR shows this label)
     serviceMonitorSelector:
