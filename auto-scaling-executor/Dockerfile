@@ -1,24 +1,37 @@
-# Use Node.js 20 Alpine as base for a lightweight image
+# Use lightweight Node image
 FROM node:20-alpine
 
 # Set working directory
 WORKDIR /app
 
-# Install dependencies for kubectl and the binary itself
-RUN apk add --no-cache curl ca-certificates && \
-    curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" && \
-    chmod +x kubectl && \
-    mv kubectl /usr/local/bin/
+# Install required tools
+RUN apk add --no-cache \
+    curl \
+    bash \
+    ca-certificates
 
-# Copy package files and install dependencies
+# Install kubectl (official binary)
+RUN curl -LO https://dl.k8s.io/release/v1.30.0/bin/linux/amd64/kubectl \
+    && chmod +x kubectl \
+    && mv kubectl /usr/local/bin/kubectl
+
+# Verify kubectl installation
+RUN kubectl version --client
+
+# Copy package files first (better caching)
 COPY package*.json ./
+
+# Install dependencies
 RUN npm install --omit=dev
 
-# Copy the rest of the application code
+# Copy application source
 COPY . .
 
-# Expose the application port
+# Application port
 EXPOSE 6000
 
-# Start the application
+# Default kubeconfig path inside container
+ENV KUBECONFIG=/root/.kube/config
+
+# Start application
 CMD ["npm", "start"]
