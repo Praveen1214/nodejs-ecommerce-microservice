@@ -16,6 +16,7 @@ import alertsRoutes from "./api/alerts.controller.js";
 import alertsSSERoutes from "./api/alerts-sse.controller.js";
 import chaosRoutes from "./api/chaos.controller.js";
 import deploymentHealthRoutes from "./api/deployment-health.controller.js";
+import deploymentHealthService from "./services/deployment-health.service.js";
 
 console.log("EXECUTION_MODE =", process.env.EXECUTION_MODE);
 
@@ -36,6 +37,8 @@ const startServer = async () => {
 
   const server = http.createServer(app);
   initSocket(server);
+
+  deploymentHealthService.start();
 
   server.listen(6000, () => {
     console.log("🚀 Auto Scaling Executor running on port 6000");

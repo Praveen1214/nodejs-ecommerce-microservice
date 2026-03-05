@@ -4,7 +4,7 @@ metadata:
   name: order
   namespace: ecommerce-prod
 spec:
-  replicas: 6  # Scaled down for t3.small cluster
+  replicas: 9  # Scaled down for t3.small cluster
   selector:
     matchLabels:
       app: order
