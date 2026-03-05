@@ -1,3 +1,47 @@
+# Node.js
+node_modules/
+npm-debug.log
+yarn-error.log
 .env
-node_modules
+.env.test
+.env.production
+dist/
+build/
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.backup
+*.tfvars
+*.tfvars.json
+.terraform.lock.hcl
+*.exe
+
+# Kubernetes
+kubeconfig
+*.p12
+*.pem
+
+# Python / Data Science (For your Research)
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.venv/
+env/
+venv/
+*.h5
+*.pkl
+*.csv
+# If you want to keep small CSVs but ignore big ones
+# data/*.csv
+
+# OS Files
 .DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# Logs
+logs/
+*.log

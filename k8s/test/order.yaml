@@ -4,7 +4,7 @@ metadata:
   name: order
   namespace: ecommerce-test
 spec:
-  replicas: 1
+  replicas: 14
   selector:
     matchLabels:
       app: order
@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
       - name: order
-        image: praveen1214/order-service:latest
+        image: praveen1214/order-service:d40454b
         imagePullPolicy: Always
         ports:
         - containerPort: 3002
@@ -49,10 +49,15 @@ kind: Service
 metadata:
   name: order
   namespace: ecommerce-test
+  labels:
+    app: order
+    environment: test
 spec:
+  type: LoadBalancer
   selector:
     app: order
     environment: test
   ports:
-  - port: 3002
-    targetPort: 3002
+    - name: http
+      port: 3002
+      targetPort: 3002

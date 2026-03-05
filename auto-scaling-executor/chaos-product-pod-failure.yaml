@@ -1,0 +1,14 @@
+apiVersion: chaos-mesh.org/v1alpha1
+kind: PodChaos
+metadata:
+  name: pod-failure-product
+  namespace: ecommerce-test
+spec:
+  action: pod-kill
+  mode: one
+  selector:
+    namespaces:
+      - ecommerce-test
+    labelSelectors:
+      app: product
+  duration: "20s"

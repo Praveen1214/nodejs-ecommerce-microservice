@@ -4,7 +4,7 @@ metadata:
   name: product
   namespace: ecommerce-test
 spec:
-  replicas: 1
+  replicas: 20
   selector:
     matchLabels:
       app: product
@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
       - name: product
-        image: praveen1214/product-service:latest
+        image: praveen1214/product-service:d40454b
         imagePullPolicy: Always
         ports:
         - containerPort: 3001
@@ -49,10 +49,15 @@ kind: Service
 metadata:
   name: product
   namespace: ecommerce-test
+  labels:
+    app: product
+    environment: test
 spec:
+  type: LoadBalancer
   selector:
     app: product
     environment: test
   ports:
-  - port: 3001
-    targetPort: 3001
+    - name: http
+      port: 3001
+      targetPort: 3001
