@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
       - name: api-gateway
-        image: praveen1214/api-gateway-service:56f9554
+        image: praveen1214/api-gateway-service:d40454b
         imagePullPolicy: Always
         ports:
         - containerPort: 3003
