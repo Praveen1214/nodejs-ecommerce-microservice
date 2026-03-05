@@ -9,7 +9,7 @@ const execAsync = promisify(exec);
 class DeploymentHealthService {
     constructor() {
         this.namespace = process.env.K8S_NAMESPACE || "ecommerce-test";
-        this.refreshInterval = 30000; // 30 seconds
+        this.refreshInterval = 5000; // 5 seconds
         this.timer = null;
     }
 

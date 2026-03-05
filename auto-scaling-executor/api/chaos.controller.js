@@ -20,6 +20,8 @@ function setupSSE(res) {
  */
 router.post("/chaos/experiment-result", async (req, res) => {
     try {
+        console.log("📥 Received chaos experiment result:", req.body.service, req.body.faultType);
+        
         const {
             service,
             faultType,
@@ -59,9 +61,11 @@ router.post("/chaos/experiment-result", async (req, res) => {
         });
 
         const savedExperiment = await newExperiment.save();
+        console.log("✅ Chaos experiment saved:", savedExperiment.experimentId, "at", savedExperiment.createdAt);
 
         // Emit event for SSE
         eventEmitter.emit("chaos:result", savedExperiment);
+        console.log("📡 Event emitted: chaos:result");
 
         res.status(201).json({
             message: "Chaos experiment result stored successfully",
@@ -76,16 +80,30 @@ router.post("/chaos/experiment-result", async (req, res) => {
 /**
  * GET /api/v1/events/chaos
  * SSE endpoint for real-time chaos experiment updates.
+ * Query params:
+ *   - all=true: Get all records
+ *   - page=1&limit=10: Use pagination (default: page=1, limit=50)
  */
 router.get("/events/chaos", async (req, res) => {
     setupSSE(res);
     console.log("🔌 SSE Client connected to /api/v1/events/chaos");
 
-    // Send historical results (last 10)
+    // Send historical results with pagination
     try {
-        const historicalResults = await ChaosExperiment.find()
-            .sort({ createdAt: -1 })
-            .limit(10);
+        const { all, page = 1, limit = 50 } = req.query;
+        
+        let query = ChaosExperiment.find()
+            .sort({ createdAt: -1 });
+
+        // If all=true, don't apply pagination
+        if (all !== "true") {
+            const skip = (parseInt(page) - 1) * parseInt(limit);
+            query = query.skip(skip).limit(parseInt(limit));
+        }
+
+        const historicalResults = await query;
+        
+        console.log(`📊 Sending ${historicalResults.length} chaos experiment results (all=${all}, page=${page}, limit=${limit})`);
 
         historicalResults.reverse().forEach(exp => {
             res.write(`data: ${JSON.stringify(exp)}\n\n`);
@@ -95,6 +113,7 @@ router.get("/events/chaos", async (req, res) => {
     }
 
     const onChaosResult = (data) => {
+        console.log("📡 Broadcasting new chaos result:", data.experimentId);
         res.write(`data: ${JSON.stringify(data)}\n\n`);
     };
 
