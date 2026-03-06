@@ -4,7 +4,7 @@ metadata:
   name: product
   namespace: ecommerce-test
 spec:
-  replicas: 32
+  replicas: 44
   selector:
     matchLabels:
       app: product
