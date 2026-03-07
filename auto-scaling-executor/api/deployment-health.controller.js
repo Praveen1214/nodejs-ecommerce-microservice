@@ -45,27 +45,50 @@ router.post("/deployment-health/report", async (req, res) => {
 /**
  * GET /api/v1/events/deployment-health
  * SSE endpoint for real-time deployment health updates.
- * Sends each record as a separate event.
+ * Sends each record as a separate event with pagination support.
+ * Query params: ?page=1&limit=10
  */
 router.get("/events/deployment-health", async (req, res) => {
     setupSSE(res);
     console.log("🔌 SSE Client connected to /api/v1/events/deployment-health");
 
-    // Send ALL records from database, one by one
-    try {
-        const allRecords = await DeploymentHealth.find()
-            .sort({ createdAt: -1 });
+    // Pagination parameters
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
 
-        if (allRecords.length > 0) {
+    // Send paginated records from database, one by one
+    try {
+        const totalCount = await DeploymentHealth.countDocuments();
+        const totalPages = Math.ceil(totalCount / limit);
+
+        const paginatedRecords = await DeploymentHealth.find()
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limit);
+
+        if (paginatedRecords.length > 0) {
+            // Send pagination info first
+            res.write(`data: ${JSON.stringify({
+                type: "pagination_info",
+                page: page,
+                limit: limit,
+                totalRecords: totalCount,
+                totalPages: totalPages,
+                hasMore: page < totalPages
+            })}\n\n`);
+
             // Send each record as a separate SSE event
-            for (const record of allRecords) {
+            for (const record of paginatedRecords) {
                 res.write(`data: ${JSON.stringify(record)}\n\n`);
             }
-            console.log(`📊 Sent ${allRecords.length} deployment health records (one by one)`);
+            console.log(`📊 Sent ${paginatedRecords.length} deployment health records (page ${page}/${totalPages})`);
         } else {
             res.write(`data: ${JSON.stringify({ 
                 status: "empty", 
-                message: "No health data yet. Trigger scaling to capture pod health."
+                message: "No health data yet. Trigger scaling to capture pod health.",
+                page: page,
+                totalRecords: 0
             })}\n\n`);
         }
     } catch (err) {
@@ -121,27 +144,37 @@ router.get("/deployment-health/latest", async (req, res) => {
 
 /**
  * GET /api/v1/deployment-health/all
- * Get all deployment health records
+ * Get all deployment health records with pagination
+ * Query params: ?page=1&limit=10&deployment=product&namespace=ecommerce-test
  */
 router.get("/deployment-health/all", async (req, res) => {
     try {
-        const { deployment, namespace, limit } = req.query;
+        const { deployment, namespace, page = 1, limit = 10 } = req.query;
 
         let query = {};
         if (deployment) query.deployment = deployment;
         if (namespace) query.namespace = namespace;
 
-        let queryBuilder = DeploymentHealth.find(query).sort({ createdAt: -1 });
-        
-        if (limit) {
-            queryBuilder = queryBuilder.limit(parseInt(limit));
-        }
+        const pageNum = parseInt(page);
+        const limitNum = parseInt(limit);
+        const skip = (pageNum - 1) * limitNum;
 
-        const allRecords = await queryBuilder;
+        const totalCount = await DeploymentHealth.countDocuments(query);
+        const totalPages = Math.ceil(totalCount / limitNum);
+
+        const records = await DeploymentHealth.find(query)
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limitNum);
 
         res.status(200).json({
-            count: allRecords.length,
-            data: allRecords
+            page: pageNum,
+            limit: limitNum,
+            totalRecords: totalCount,
+            totalPages: totalPages,
+            hasMore: pageNum < totalPages,
+            count: records.length,
+            data: records
         });
     } catch (error) {
         console.error("❌ Error fetching all health records:", error.message);
