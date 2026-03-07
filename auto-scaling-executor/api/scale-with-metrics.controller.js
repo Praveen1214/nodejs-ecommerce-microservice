@@ -2,6 +2,7 @@
 
 import express from "express"
 import ScalingService from "../services/scaling.service.js"
+import DeploymentHealthService from "../services/deployment-health.service.js"
 import { emitScalingEvent } from "../realtime/alert.publisher.js"
 
 const router = express.Router()
@@ -46,6 +47,14 @@ router.post("/scale-with-metrics", async (req, res) => {
           scale_action: svc.scale_action || "scale_up",
         })
 
+        // Capture deployment health in real-time (NO DB storage)
+        try {
+          const namespace = process.env.K8S_NAMESPACE || "ecommerce-test"
+          await DeploymentHealthService.captureDeploymentHealthRealtime(svc.deployment, namespace)
+        } catch (e) {
+          console.error("❌ Failed to capture deployment health:", e.message)
+        }
+
         // Emit socket event for each result
         try {
           emitScalingEvent(result)
@@ -71,6 +80,14 @@ router.post("/scale-with-metrics", async (req, res) => {
       metrics: body.metrics || {},
       scale_action: body.scale_action || "scale_up",
     })
+
+    // Capture deployment health in real-time (NO DB storage)
+    try {
+      const namespace = process.env.K8S_NAMESPACE || "ecommerce-test"
+      await DeploymentHealthService.captureDeploymentHealthRealtime(body.deployment, namespace)
+    } catch (e) {
+      console.error("❌ Failed to capture deployment health:", e.message)
+    }
 
     // Emit socket event for single result
     try {

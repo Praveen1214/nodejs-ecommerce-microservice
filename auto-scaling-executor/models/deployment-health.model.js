@@ -2,13 +2,20 @@ import mongoose from "mongoose";
 
 const DeploymentHealthSchema = new mongoose.Schema({
     overallScore: { type: Number, required: true },
+    deployment: { type: String }, // Deployment name
+    namespace: { type: String }, // Kubernetes namespace
+    replicas: { type: Number }, // Current replica count
+    lastScaled: { type: Date }, // When deployment was scaled
     podStatus: [{
         id: String,
         name: String,
         ready: Boolean,
         liveness: Boolean,
         age: String,
-        status: String
+        status: String,
+        podIP: String, // Pod IP address
+        node: String, // Node name where pod is running
+        restarts: Number // Individual pod restart count
     }],
     restarts: [{
         service: String,
