@@ -10,6 +10,15 @@ const ScalingLogSchema = new mongoose.Schema({
     required_replicas: { type: Number },
     status: { type: String },
     message: { type: String },
+    source: { type: String, enum: ["manual", "ml_prediction"], default: "manual" },
+    prediction_metadata: {
+        current_pods: { type: Number },
+        predicted_pods: { type: Number },
+        ml_latency_ms: { type: Number },
+        window_end_utc: { type: String },
+        step: { type: Number },
+        confidence: { type: Number },
+    },
     rollback_reason: { type: [String] },
     production_promotion: {
         promoted: { type: Boolean },
