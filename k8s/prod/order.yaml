@@ -4,7 +4,7 @@ metadata:
   name: order
   namespace: ecommerce-prod
 spec:
-  replicas: 16  # Scaled down for t3.small cluster
+  replicas: 16 # Scaled down for t3.small cluster
   selector:
     matchLabels:
       app: order
@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
         - name: order
-          image: abhisheklpeiris/order-service:latest
+          image: praveen1214/order-service:56f9554
           imagePullPolicy: Always
           ports:
             - containerPort: 3002

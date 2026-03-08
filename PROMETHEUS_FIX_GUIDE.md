@@ -48,25 +48,25 @@ Since we modified the application code, you need to rebuild the Docker images:
 
 ```bash
 # Build auth service
-docker build -t abhisheklpeiris/auth-service:latest ./auth
+docker build -t praveen1214/auth-service:latest ./auth
 
 # Build order service
-docker build -t abhisheklpeiris/order-service:latest ./order
+docker build -t praveen1214/order-service:latest ./order
 
 # Build product service (optional, no changes but for consistency)
-docker build -t abhisheklpeiris/product-service:latest ./product
+docker build -t praveen1214/product-service:latest ./product
 
 # Build api-gateway (optional, no changes but for consistency)
-docker build -t abhisheklpeiris/api-gateway-service:latest ./api-gateway
+docker build -t praveen1214/api-gateway-service:latest ./api-gateway
 ```
 
 ### Step 2: Push Images to Docker Hub
 
 ```bash
-docker push abhisheklpeiris/auth-service:latest
-docker push abhisheklpeiris/order-service:latest
-docker push abhisheklpeiris/product-service:latest
-docker push abhisheklpeiris/api-gateway-service:latest
+docker push praveen1214/auth-service:latest
+docker push praveen1214/order-service:latest
+docker push praveen1214/product-service:latest
+docker push praveen1214/api-gateway-service:latest
 ```
 
 ### Step 3: Apply Updated Kubernetes Manifests
