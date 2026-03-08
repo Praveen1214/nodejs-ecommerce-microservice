@@ -4,15 +4,13 @@
  * Connects the ML Prediction API <-> K8s Scaling Executor to form
  * a closed-loop proactive autoscaling system.
  *
- * Converted from standalone controller (1).js into a reusable service
+ * Converted from the old standalone controller script into a reusable service
  * that runs inside the auto-scaling-executor Express app.
  */
 
 import https from "https";
 import http from "http";
-import ScalingService from "./scaling.service.js";
-import DeploymentHealthService from "./deployment-health.service.js";
-import { emitScalingEvent, emitPredictionEvent } from "../realtime/alert.publisher.js";
+import { emitPredictionEvent } from "../realtime/alert.publisher.js";
 import eventEmitter from "../utils/events.js";
 
 // ============================================================
@@ -21,6 +19,9 @@ import eventEmitter from "../utils/events.js";
 
 const ML_API_URL = process.env.ML_API_URL
   || "https://mlapi-b3h4fpduauancfcg.southeastasia-01.azurewebsites.net";
+
+const EXECUTOR_URL = process.env.EXECUTOR_URL
+  || "http://localhost:6000/api/v1/scale-with-metrics";
 
 const LOOKBACK = 48; // sliding window size (48 rows × 21 features)
 
@@ -153,6 +154,19 @@ async function callPredict(windowData, windowEndUtc, serviceId = "Order") {
   return request(`${ML_API_URL}/predict`, { method: "POST", body: payload, timeoutMs: 30_000 });
 }
 
+function logPredictionResponse(prediction, context = "") {
+  const snapshot = {
+    service_id: prediction.service_id || "Order",
+    window_end_utc: prediction.window_end_utc || null,
+    current_pods: prediction.current_pods,
+    predicted_pods: prediction.predicted_pods,
+    scale_action: prediction.scale_action,
+    latency_ms: prediction.latency_ms,
+  };
+  const prefix = context ? `${context} ` : "";
+  log("PREDICT", `${prefix}ML response: ${JSON.stringify(snapshot)}`);
+}
+
 // ============================================================
 // 5. Prediction → Executor payload converter
 // ============================================================
@@ -193,12 +207,76 @@ function buildExecutorPayload(prediction, rawMetrics) {
   };
 }
 
+async function sendToExecutor(payload, dryRun = false, context = "scale") {
+  if (dryRun) {
+    log("DRY-RUN", `${context}: would send to ${EXECUTOR_URL}\n${JSON.stringify(payload, null, 2)}`);
+    return { status: "dry-run", message: "Skipped (dry-run mode)" };
+  }
+
+  try {
+    log("SCALE", `${context}: POST ${EXECUTOR_URL}`);
+    log("SCALE", `${context}: payload=${JSON.stringify(payload)}`);
+
+    const executorResponse = await request(EXECUTOR_URL, { method: "POST", body: payload });
+    const firstResult = Array.isArray(executorResponse?.results) ? executorResponse.results[0] : null;
+    const status = firstResult?.status || executorResponse?.status || "executed";
+    const message = firstResult?.message || executorResponse?.message || "Executor call completed";
+
+    log("OK", `${context}: executor status=${status}`);
+    return {
+      status,
+      message,
+      executor_response: executorResponse,
+    };
+  } catch (err) {
+    if (err.code === "ECONNREFUSED" || err.message.includes("connect")) {
+      log("WARN", `Executor not reachable at ${EXECUTOR_URL} - is it running?`);
+      return { status: "error", message: "Executor service unreachable" };
+    }
+    log("ERROR", `Executor call failed: ${err.message}`);
+    return { status: "error", message: err.message };
+  }
+}
+
+async function executeScalingHttp(prediction, rawMetrics, dryRun = false) {
+  const { current_pods, predicted_pods, scale_action } = prediction;
+
+  if (scale_action === "no_change") {
+    log("SKIP", "Skipping executor call because scale_action=no_change");
+    return { status: "skipped", message: "no_change - no scaling needed" };
+  }
+
+  const payload = buildExecutorPayload(prediction, rawMetrics);
+  const result = await sendToExecutor(payload, dryRun, "scale");
+
+  if (result.status === "error" || result.status === "dry-run") {
+    return result;
+  }
+
+  return {
+    ...result,
+    source: "ml_prediction",
+    prediction_metadata: {
+      current_pods,
+      predicted_pods,
+      ml_latency_ms: prediction.latency_ms,
+      window_end_utc: prediction.window_end_utc || null,
+    },
+  };
+}
+
+async function executeRollbackHttp(rollbackPayload, dryRun = false) {
+  const result = await sendToExecutor(rollbackPayload, dryRun, "rollback");
+  if (result.status === "error" || result.status === "dry-run") return result;
+  return { ...result, source: "ml_prediction" };
+}
+
 // ============================================================
-// 6. Execute scaling via ScalingService (in-process, no HTTP loopback)
+// 6. Legacy in-process scaling path (unused, kept for reference)
 // ============================================================
 
-async function executeScaling(prediction, rawMetrics, dryRun = false) {
-  const { current_pods, predicted_pods, scale_action } = prediction;
+async function legacyExecuteScalingInProcess(prediction, rawMetrics, dryRun = false) {
+  return executeScalingHttp(prediction, rawMetrics, dryRun);
 
   if (scale_action === "no_change") {
     return { status: "skipped", message: "no_change — no scaling needed" };
@@ -274,7 +352,8 @@ async function executeScaling(prediction, rawMetrics, dryRun = false) {
 }
 
 // Helper for rollback payloads (validation still uses HTTP-style payload)
-async function executeRollback(rollbackPayload, dryRun = false) {
+async function legacyExecuteRollbackInProcess(rollbackPayload, dryRun = false) {
+  return executeRollbackHttp(rollbackPayload, dryRun);
   if (dryRun) {
     log("DRY-RUN", `Rollback payload:\n${JSON.stringify(rollbackPayload, null, 2)}`);
     return { status: "dry-run", message: "Rollback skipped (dry-run)" };
@@ -325,6 +404,18 @@ async function validateScaleAction(data, step, originalPrediction, dryRun = fals
   const nextCurrPods = nextPred.current_pods;
   const nextPredPods = nextPred.predicted_pods;
 
+  if (origAction === "no_change") {
+    if (nextAction === "no_change") {
+      const reason = `Confirmed: no_change still valid â€” next window predicts no_change (${nextPredPods} pods)`;
+      log("VALIDATE", `âœ“ ${reason}`);
+      return { status: "validated", message: reason, rollbackPayload: null };
+    }
+
+    const reason = `No-change drift detected â€” next window predicts ${nextAction} (${nextPredPods} pods)`;
+    log("WARN", reason);
+    return { status: "drift", message: reason, rollbackPayload: null };
+  }
+
   const conflict = (
     (origAction === "scale_up"   && nextAction === "scale_down") ||
     (origAction === "scale_down" && nextAction === "scale_up")
@@ -360,7 +451,7 @@ async function validateScaleAction(data, step, originalPrediction, dryRun = fals
     if (dryRun) {
       log("DRY-RUN", `Rollback payload:\n${JSON.stringify(rollbackPayload, null, 2)}`);
     } else {
-      const result = await executeRollback(rollbackPayload, false);
+      const result = await executeRollbackHttp(rollbackPayload, false);
       log("ROLLBACK", `Rollback executor result: ${JSON.stringify(result)}`);
     }
 
@@ -394,11 +485,12 @@ async function runSinglePrediction({ serviceId = "Order", dryRun = false, valida
 
   // Add window_end_utc to prediction for metadata tracking
   prediction.window_end_utc = windowEndUtc;
+  logPredictionResponse(prediction, "single");
 
   let executorResult = null;
 
   if (scale_action !== "no_change") {
-    executorResult = await executeScaling(prediction, latestRow, dryRun);
+    executorResult = await executeScalingHttp(prediction, latestRow, dryRun);
   }
 
   const deployment = (serviceId || "Order").toLowerCase();
@@ -456,10 +548,10 @@ async function runControllerLoop({
   console.log();
   console.log("=".repeat(76));
   console.log("  SMART RESOURCE ALLOCATION CONTROLLER (embedded)");
-  console.log("  ML Prediction API  ←→  K8s Scaling Executor (direct)");
+  console.log("  ML Prediction API  ←→  K8s Scaling Executor (HTTP)");
   console.log("=".repeat(76));
   console.log(`  ML API:     ${ML_API_URL}`);
-  console.log(`  Executor:   ScalingService (in-process)`);
+  console.log(`  Executor:   ${EXECUTOR_URL}`);
   console.log(`  Service:    ${serviceId}`);
   console.log(`  Interval:   ${intervalSec}s${intervalSec === 60 ? " (real-time)" : ""}`);
   console.log(`  Dry-run:    ${dryRun}`);
@@ -488,6 +580,9 @@ async function runControllerLoop({
     no_changes:     0,
     executor_calls: 0,
     executor_errors:0,
+    validation_checks: 0,
+    validation_skipped: 0,
+    validation_drifts: 0,
     validated:      0,
     rollbacks:      0,
     latencies:      [],
@@ -532,19 +627,37 @@ async function runControllerLoop({
 
     // Attach window_end_utc for metadata
     prediction.window_end_utc = windowEndUtc;
+    logPredictionResponse(prediction, `step=${step + 1}`);
 
     stats.predictions++;
     stats.latencies.push(latency);
 
     let execResult = "—";
     let executorStatus = null;
+    let validationStatus = null;
 
     if (action === "no_change") {
       stats.no_changes++;
       execResult = "skipped";
       executorStatus = "skipped";
+      if (validate) {
+        const vresult = await validateScaleAction(data, step, prediction, dryRun);
+        validationStatus = vresult.status;
+        stats.validation_checks++;
+
+        if (vresult.status === "validated") {
+          stats.validated++;
+          execResult += " | valid";
+        } else if (vresult.status === "drift") {
+          stats.validation_drifts++;
+          execResult += " | drift";
+        } else if (vresult.status === "skipped") {
+          stats.validation_skipped++;
+          execResult += " | v-skip";
+        }
+      }
     } else {
-      const result = await executeScaling(prediction, latestRow, dryRun);
+      const result = await executeScalingHttp(prediction, latestRow, dryRun);
       stats.executor_calls++;
 
       if (result.status === "error") {
@@ -565,6 +678,8 @@ async function runControllerLoop({
       // Validate + Rollback
       if (validate) {
         const vresult = await validateScaleAction(data, step, prediction, dryRun);
+        validationStatus = vresult.status;
+        stats.validation_checks++;
         if (vresult.status === "validated") {
           stats.validated++;
           execResult += " ✓valid";
@@ -587,7 +702,7 @@ async function runControllerLoop({
       window_end_utc: windowEndUtc,
       executor_status: executorStatus,
       dry_run: dryRun,
-      validation_status: null,
+      validation_status: validationStatus,
     };
     try { emitPredictionEvent(predictionEvent); } catch (e) { /* swallow */ }
     eventEmitter.emit("prediction:result", predictionEvent);
@@ -641,7 +756,10 @@ function printSummary(stats) {
   console.log(`  No change:             ${String(stats.no_changes).padStart(4)}  ${pct(stats.no_changes)}`);
   console.log(`  Executor calls sent:   ${stats.executor_calls}`);
   console.log(`  Executor errors:       ${stats.executor_errors}`);
+  console.log(`  Validation checks:     ${stats.validation_checks}`);
   console.log(`  Validations passed:    ${stats.validated}`);
+  console.log(`  Validation drifts:     ${stats.validation_drifts}`);
+  console.log(`  Validation skipped:    ${stats.validation_skipped}`);
   console.log(`  Rollbacks triggered:   ${stats.rollbacks}`);
   console.log(`  Avg prediction latency: ${avg.toFixed(1)}ms`);
   console.log(`  Min/Max latency:       ${min.toFixed(1)}ms / ${max.toFixed(1)}ms`);
@@ -685,7 +803,7 @@ const PredictionService = {
   getConfig() {
     return {
       ml_api_url: ML_API_URL,
-      executor: "ScalingService (in-process, no HTTP loopback)",
+      executor: EXECUTOR_URL,
       lookback_window: LOOKBACK,
       feature_count: FEATURE_COLS.length,
     };

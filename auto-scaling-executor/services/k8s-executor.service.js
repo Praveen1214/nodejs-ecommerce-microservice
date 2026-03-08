@@ -54,7 +54,7 @@ class K8sExecutor {
         event: "K8S_GET_FAILED",
         error: "Deployment name is required",
       })
-      return 0
+      return null
     }
 
     try {
@@ -63,7 +63,17 @@ class K8sExecutor {
 
       const { stdout } = await execAsync(cmd)
 
-      const replicas = parseInt(stdout.trim().replace(/'/g, "")) || 0
+      const parsed = parseInt(stdout.trim().replace(/'/g, ""), 10)
+      if (Number.isNaN(parsed)) {
+        logger.error({
+          event: "K8S_GET_FAILED_PARSE",
+          deployment,
+          namespace: ns,
+          raw_output: stdout,
+        })
+        return null
+      }
+      const replicas = parsed
 
       logger.info({
         event: "K8S_GET_SUCCESS",
@@ -80,7 +90,7 @@ class K8sExecutor {
         namespace: ns,
         error: err.message,
       })
-      return 0
+      return null
     }
   }
 
@@ -196,9 +206,20 @@ class K8sExecutor {
     }
 
     const previous = await this.getCurrentReplicas(deployment, ns)
+    if (previous === null) {
+      return {
+        deployment,
+        previous_replicas: null,
+        required_replicas: replicas,
+        status: "FAILED",
+        error: `Unable to read current replicas for deployment '${deployment}' in namespace '${ns}'`,
+      }
+    }
+
+    const safeReplicas = Math.max(0, replicas)
 
     try {
-      const cmd = `kubectl scale deployment ${deployment} -n ${ns} --replicas=${replicas}`
+      const cmd = `kubectl scale deployment ${deployment} -n ${ns} --replicas=${safeReplicas}`
       await execAsync(cmd)
 
       logger.info({
@@ -206,17 +227,17 @@ class K8sExecutor {
         deployment,
         namespace: ns,
         previous_replicas: previous,
-        required_replicas: replicas,
+        required_replicas: safeReplicas,
         status: "SUCCESS",
       })
 
       // Update YAML manifest to persist the change
-      const yamlUpdate = await this.updateYamlManifest(deployment, replicas, ns)
+      const yamlUpdate = await this.updateYamlManifest(deployment, safeReplicas, ns)
 
       return {
         deployment,
         previous_replicas: previous,
-        required_replicas: replicas,
+        required_replicas: safeReplicas,
         status: "SUCCESS",
         yamlUpdate,
       }
@@ -226,14 +247,14 @@ class K8sExecutor {
         deployment,
         namespace: ns,
         previous_replicas: previous,
-        required_replicas: replicas,
+        required_replicas: safeReplicas,
         error: err.message,
       })
 
       return {
         deployment,
         previous_replicas: previous,
-        required_replicas: replicas,
+        required_replicas: safeReplicas,
         status: "FAILED",
         error: err.message,
       }
@@ -263,11 +284,35 @@ class K8sExecutor {
     }
 
     const current = await this.getCurrentReplicas(deployment, ns)
-    const newTotal = current + additionalReplicas
+    if (current === null) {
+      return {
+        deployment,
+        previous_replicas: null,
+        additional_replicas: 0,
+        required_replicas: null,
+        status: "FAILED",
+        error: `Unable to read current replicas for deployment '${deployment}' in namespace '${ns}'`,
+      }
+    }
+
+    const rawTotal = current + additionalReplicas
+    const newTotal = Math.max(0, rawTotal)
+    const effectiveAdditional = newTotal - current
 
     console.log(
       ` Incremental scaling: ${current} + ${additionalReplicas} = ${newTotal}`
     )
+
+    if (additionalReplicas < 0 && current === 0) {
+      return {
+        deployment,
+        previous_replicas: current,
+        additional_replicas: 0,
+        required_replicas: current,
+        status: "NO_ACTION",
+        message: "Deployment already at 0 replicas; scale_down skipped",
+      }
+    }
 
     try {
       const cmd = `kubectl scale deployment ${deployment} -n ${ns} --replicas=${newTotal}`
@@ -278,7 +323,7 @@ class K8sExecutor {
         deployment,
         namespace: ns,
         previous_replicas: current,
-        additional_replicas: additionalReplicas,
+        additional_replicas: effectiveAdditional,
         required_replicas: newTotal,
         status: "SUCCESS",
       })
@@ -289,7 +334,7 @@ class K8sExecutor {
       return {
         deployment,
         previous_replicas: current,
-        additional_replicas: additionalReplicas,
+        additional_replicas: effectiveAdditional,
         required_replicas: newTotal,
         status: "SUCCESS",
         yamlUpdate,
@@ -307,7 +352,7 @@ class K8sExecutor {
       return {
         deployment,
         previous_replicas: current,
-        additional_replicas: additionalReplicas,
+        additional_replicas: effectiveAdditional,
         required_replicas: newTotal,
         status: "FAILED",
         error: err.message,

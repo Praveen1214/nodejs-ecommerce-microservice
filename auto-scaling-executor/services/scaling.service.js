@@ -104,6 +104,25 @@ class ScalingService {
     // ─────────────────────────────────────────
     if (scale_action === "no_change") {
       const previousReplicas = await K8sExecutor.getCurrentReplicas(deployment)
+      if (mode === "K8S" && previousReplicas === null) {
+        return {
+          deployment,
+          request_pods,
+          scale_action: "no_change",
+          previous_replicas: null,
+          attempted_additional_replicas: 0,
+          additional_replicas: 0,
+          required_replicas: null,
+          status: "FAILED",
+          message: `Unable to read current replicas for deployment '${deployment}'`,
+          validation: {
+            passed: false,
+            rolledBack: false,
+            skipped: true,
+            reason: "Kubernetes replica lookup failed",
+          },
+        }
+      }
       return {
         deployment,
         request_pods,
@@ -137,7 +156,6 @@ class ScalingService {
     // If NO metrics → just scale directly (no validation)
     if (!hasMetrics) {
       const namespace = process.env.K8S_NAMESPACE || "ecommerce-test"
-      const previousReplicas = await K8sExecutor.getCurrentReplicas(deployment)
       const baseResult =
         mode === "K8S"
           ? await K8sExecutor.scaleDeploymentIncremental(deployment, additionalPods)
@@ -154,10 +172,10 @@ class ScalingService {
           deployment,
           request_pods,
           scale_action: scale_action,
-          previous_replicas: previousReplicas,
+          previous_replicas: baseResult.previous_replicas,
           attempted_additional_replicas: additionalPods,
-          additional_replicas: additionalPods,
-          required_replicas: previousReplicas + additionalPods,
+          additional_replicas: baseResult.additional_replicas ?? additionalPods,
+          required_replicas: baseResult.required_replicas,
           status: "SUCCESS_NO_VALIDATION",
           message: "Scaled successfully (no metrics provided, validation skipped)",
           production_promotion: productionPromotion,
