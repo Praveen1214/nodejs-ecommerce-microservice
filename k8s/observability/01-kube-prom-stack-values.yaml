@@ -3,13 +3,11 @@ prometheus:
     scrapeInterval: 15s
     evaluationInterval: 15s
 
-    # Allow ServiceMonitors/PodMonitors from ANY namespace
-    serviceMonitorNamespaceSelector:
-      any: true
-    podMonitorNamespaceSelector:
-      any: true
+    # Allow ServiceMonitors/PodMonitors from ANY namespace (empty selector = all)
+    serviceMonitorNamespaceSelector: {}
+    podMonitorNamespaceSelector: {}
 
-    # Select only objects with label release: prometheus (your CR shows this label)
+    # Select only objects with label release: prometheus
     serviceMonitorSelector:
       matchLabels:
         release: prometheus
@@ -22,3 +20,9 @@ grafana:
   adminPassword: admin
   service:
     type: ClusterIP
+
+# Fix for Docker Desktop / Kind on Windows: disable rootfs hostPath mount
+# that requires shared/slave mount propagation (not available on Windows Docker Desktop)
+prometheus-node-exporter:
+  hostRootFsMount:
+    enabled: false

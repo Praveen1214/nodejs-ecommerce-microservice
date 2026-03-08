@@ -4,7 +4,7 @@ metadata:
   name: order
   namespace: ecommerce-test
 spec:
-  replicas: 16
+  replicas: 2
   selector:
     matchLabels:
       app: order
@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
       - name: order
-        image: praveen1214/order-service:d40454b
+        image: praveen1214/order-service:56f9554
         imagePullPolicy: Always
         ports:
         - containerPort: 3002
