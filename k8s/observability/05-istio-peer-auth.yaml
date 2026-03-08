@@ -1,0 +1,11 @@
+# Enable Istio PERMISSIVE mTLS for ecommerce-test namespace
+# PERMISSIVE allows both plaintext (for Prometheus scraping) and mTLS (for mesh traffic)
+# connection_security_policy label still reports "mutual_tls" for in-mesh calls
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: ecommerce-test
+spec:
+  mtls:
+    mode: PERMISSIVE
