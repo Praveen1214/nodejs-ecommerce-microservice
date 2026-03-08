@@ -13,7 +13,9 @@ export function emitScalingEvent(result) {
     promoted: result.production_promotion?.promoted ?? false,
     timestamp: new Date().toISOString(),
     rule: result.scale_action === 'scale_up' ? "Scale Up Triggered" : "Scale Down Triggered",
-    severity: result.status === "ROLLED_BACK" ? "high" : "low"
+    severity: result.status === "ROLLED_BACK" ? "high" : "low",
+    source: result.source || "manual",
+    prediction_metadata: result.prediction_metadata || null,
   }
 
   if (result.status === "ROLLED_BACK") {
@@ -25,6 +27,36 @@ export function emitScalingEvent(result) {
   ) {
     io.emit("scaling:scaled", payload)
     console.log("🟢 scaling:scaled emitted")
+  }
+}
+
+/**
+ * Emit a prediction event to the dashboard via Socket.IO.
+ * Fired every time the ML controller produces a prediction,
+ * regardless of whether it triggers scaling or not.
+ */
+export function emitPredictionEvent(predictionData) {
+  try {
+    const io = getIO()
+
+    const payload = {
+      step: predictionData.step,
+      deployment: predictionData.deployment,
+      current_pods: predictionData.current_pods,
+      predicted_pods: predictionData.predicted_pods,
+      scale_action: predictionData.scale_action,
+      ml_latency_ms: predictionData.ml_latency_ms,
+      window_end_utc: predictionData.window_end_utc,
+      executor_status: predictionData.executor_status || null,
+      dry_run: predictionData.dry_run || false,
+      validation_status: predictionData.validation_status || null,
+      timestamp: new Date().toISOString(),
+    }
+
+    io.emit("prediction:result", payload)
+    console.log(`🤖 prediction:result emitted — ${payload.deployment} ${payload.scale_action} (${payload.current_pods}→${payload.predicted_pods})`)
+  } catch (e) {
+    // Socket may not be initialized; swallow
   }
 }
 

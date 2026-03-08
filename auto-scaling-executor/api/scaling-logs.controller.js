@@ -55,6 +55,8 @@ router.get("/scaling-events/stream", async (req, res) => {
             status: savedLog.status,
             previous_replicas: savedLog.previous_replicas,
             required_replicas: savedLog.required_replicas,
+            source: savedLog.source || "manual",
+            prediction_metadata: savedLog.prediction_metadata || null,
             timestamp: savedLog.timestamp
         };
         res.write(`data: ${JSON.stringify(payload)}\n\n`);
