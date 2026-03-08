@@ -1,0 +1,2 @@
+FROM praveen1214/product-service:abe1799
+COPY src/ /app/src/

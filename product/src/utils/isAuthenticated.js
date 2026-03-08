@@ -1,24 +1,29 @@
-const jwt = require("jsonwebtoken");
 require("dotenv").config();
 
-function isAuthenticated(req, res, next) {
-  // Check for the presence of an authorization header
+const AUTH_SERVICE_URL = process.env.AUTH_SERVICE_URL || "http://auth:3000";
+
+async function isAuthenticated(req, res, next) {
   const authHeader = req.headers.authorization;
   if (!authHeader) {
     return res.status(401).json({ message: "Unauthorized" });
   }
 
-  // Extract the token from the header
-  const token = authHeader.split(" ")[1];
-
   try {
-    // Verify the token using the JWT library and the secret key
-    const decodedToken = jwt.verify(token, process.env.JWT_SECRET);
-    req.user = decodedToken;
-    next();
+    const response = await fetch(`${AUTH_SERVICE_URL}/verify`, {
+      method: "POST",
+      headers: { "Authorization": authHeader },
+    });
+    const data = await response.json();
+
+    if (response.ok && data.valid) {
+      req.user = data.user;
+      next();
+    } else {
+      res.status(401).json({ message: "Unauthorized" });
+    }
   } catch (err) {
-    console.error(err);
-    return res.status(401).json({ message: "Unauthorized" });
+    console.error("Auth service call failed:", err.message);
+    res.status(503).json({ message: "Auth service unavailable" });
   }
 }
 

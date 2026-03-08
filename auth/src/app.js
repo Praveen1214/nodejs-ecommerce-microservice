@@ -1,6 +1,7 @@
 const express = require("express");
 const mongoose = require("mongoose");
 const client = require("prom-client");
+const jwt = require("jsonwebtoken");
 
 const config = require("./config");
 const authMiddleware = require("./middlewares/authMiddleware");
@@ -45,12 +46,25 @@ class App {
       prefix: "nodejs_"
     });
 
-    // HTTP Request Duration Histogram
+    // HTTP requests counter (dashboard expects this name with "status" label)
+    this.httpRequestsTotal = new client.Counter({
+      name: "http_requests_total",
+      help: "Total HTTP requests",
+      labelNames: ["status"]
+    });
+
+    // HTTP Request Duration Histogram (dashboard expects "_milliseconds")
     this.httpRequestDurationMs = new client.Histogram({
-      name: "http_request_duration_ms",
+      name: "http_request_duration_milliseconds",
       help: "HTTP request duration in milliseconds",
       labelNames: ["method", "route", "status_code", "service_name"],
       buckets: [10, 25, 50, 100, 200, 500, 1000, 2000, 5000]
+    });
+
+    // Active requests gauge (dashboard expects this)
+    this.appQueueLength = new client.Gauge({
+      name: "app_queue_length",
+      help: "Number of requests currently being processed"
     });
 
     // HTTP Error Counter
@@ -60,11 +74,14 @@ class App {
       labelNames: ["route", "status_code", "service_name"]
     });
 
+    this.register.registerMetric(this.httpRequestsTotal);
     this.register.registerMetric(this.httpRequestDurationMs);
+    this.register.registerMetric(this.appQueueLength);
     this.register.registerMetric(this.httpErrorCounter);
 
     // 🔥 Metrics Middleware
     this.app.use((req, res, next) => {
+      this.appQueueLength.inc();
       const end = this.httpRequestDurationMs.startTimer({
         method: req.method,
         route: req.path,
@@ -72,12 +89,15 @@ class App {
       });
 
       res.on("finish", () => {
-        end({ status_code: res.statusCode });
+        this.appQueueLength.dec();
+        const status = res.statusCode.toString();
+        end({ status_code: status });
+        this.httpRequestsTotal.inc({ status });
 
         if (res.statusCode >= 400) {
           this.httpErrorCounter.inc({
             route: req.path,
-            status_code: res.statusCode,
+            status_code: status,
             service_name: "auth"
           });
         }
@@ -127,6 +147,21 @@ class App {
     this.app.post("/register", (req, res) =>
       this.authController.register(req, res)
     );
+
+    // Token verification endpoint for inter-service auth
+    this.app.post("/verify", (req, res) => {
+      const authHeader = req.headers.authorization;
+      if (!authHeader) {
+        return res.status(401).json({ valid: false, message: "No token" });
+      }
+      const token = authHeader.split(" ")[1];
+      try {
+        const decoded = jwt.verify(token, config.jwtSecret);
+        res.json({ valid: true, user: decoded });
+      } catch (err) {
+        res.status(401).json({ valid: false, message: "Invalid token" });
+      }
+    });
 
     this.app.get(
       "/dashboard",

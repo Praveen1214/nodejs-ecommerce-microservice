@@ -1,0 +1,2 @@
+FROM praveen1214/api-gateway-service:d40454b
+COPY index.js /app/index.js

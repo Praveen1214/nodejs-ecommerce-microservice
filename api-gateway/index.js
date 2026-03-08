@@ -13,12 +13,25 @@ const app = express();
 const register = new client.Registry();
 client.collectDefaultMetrics({ register, prefix: "nodejs_" });
 
-// HTTP latency
+// HTTP requests counter (dashboard expects this name)
+const httpRequestsTotal = new client.Counter({
+  name: "http_requests_total",
+  help: "Total HTTP requests",
+  labelNames: ["status"],
+});
+
+// HTTP latency (dashboard expects "_milliseconds")
 const httpRequestDurationMs = new client.Histogram({
-  name: "http_request_duration_ms",
-  help: "HTTP request duration in ms",
+  name: "http_request_duration_milliseconds",
+  help: "HTTP request duration in milliseconds",
   labelNames: ["method", "route", "status_code", "service_name"],
   buckets: [10, 25, 50, 100, 200, 500, 1000, 2000],
+});
+
+// Active requests gauge (dashboard expects this)
+const appQueueLength = new client.Gauge({
+  name: "app_queue_length",
+  help: "Number of requests currently being processed",
 });
 
 // HTTP errors
@@ -43,13 +56,16 @@ const downstreamLatency = new client.Histogram({
   buckets: [10, 50, 100, 200, 500, 1000, 2000],
 });
 
+register.registerMetric(httpRequestsTotal);
 register.registerMetric(httpRequestDurationMs);
+register.registerMetric(appQueueLength);
 register.registerMetric(httpErrorCounter);
 register.registerMetric(proxyRequestCounter);
 register.registerMetric(downstreamLatency);
 
 // HTTP Middleware
 app.use((req, res, next) => {
+  appQueueLength.inc();
   const end = httpRequestDurationMs.startTimer({
     method: req.method,
     route: req.path,
@@ -57,12 +73,15 @@ app.use((req, res, next) => {
   });
 
   res.on("finish", () => {
-    end({ status_code: res.statusCode });
+    appQueueLength.dec();
+    const status = res.statusCode.toString();
+    end({ status_code: status });
+    httpRequestsTotal.inc({ status });
 
     if (res.statusCode >= 400) {
       httpErrorCounter.inc({
         route: req.path,
-        status_code: res.statusCode,
+        status_code: status,
         service_name: "api-gateway",
       });
     }
@@ -137,8 +156,9 @@ app.get("/health", async (req, res) => {
 ---------------------------------------------------- */
 
 app.use("/auth", (req, res) => {
-  proxyRequestCounter.inc({ target_service: "auth" });
-  proxy.web(req, res, { target: "http://auth:3000" });
+  proxyRequestCounter.inc({ target_service: "product" });
+  req.url = "/auth" + req.url;
+  proxy.web(req, res, { target: "http://product:3001" });
 });
 
 app.use("/products", (req, res) => {
@@ -147,8 +167,9 @@ app.use("/products", (req, res) => {
 });
 
 app.use("/orders", (req, res) => {
-  proxyRequestCounter.inc({ target_service: "order" });
-  proxy.web(req, res, { target: "http://order:3002" });
+  proxyRequestCounter.inc({ target_service: "product" });
+  req.url = "/orders" + req.url;
+  proxy.web(req, res, { target: "http://product:3001" });
 });
 
 /* ---------------------------------------------------

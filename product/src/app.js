@@ -30,12 +30,25 @@ class App {
       prefix: "nodejs_"
     });
 
-    // HTTP latency histogram
+    // HTTP requests counter (dashboard expects this name)
+    this.httpRequestsTotal = new client.Counter({
+      name: "http_requests_total",
+      help: "Total HTTP requests",
+      labelNames: ["status"]
+    });
+
+    // HTTP latency histogram (dashboard expects "_milliseconds")
     this.httpRequestDurationMs = new client.Histogram({
-      name: "http_request_duration_ms",
-      help: "HTTP request duration in ms",
+      name: "http_request_duration_milliseconds",
+      help: "HTTP request duration in milliseconds",
       labelNames: ["method", "route", "status_code", "service_name"],
       buckets: [10, 25, 50, 100, 200, 500, 1000, 2000]
+    });
+
+    // Active requests gauge (dashboard expects this)
+    this.appQueueLength = new client.Gauge({
+      name: "app_queue_length",
+      help: "Number of requests currently being processed"
     });
 
     // HTTP error counter
@@ -74,7 +87,9 @@ class App {
     });
 
     // Register metrics
+    this.register.registerMetric(this.httpRequestsTotal);
     this.register.registerMetric(this.httpRequestDurationMs);
+    this.register.registerMetric(this.appQueueLength);
     this.register.registerMetric(this.httpErrorCounter);
     this.register.registerMetric(this.productCreatedCounter);
     this.register.registerMetric(this.productUpdatedCounter);
@@ -83,6 +98,7 @@ class App {
 
     // Middleware to track HTTP
     this.app.use((req, res, next) => {
+      this.appQueueLength.inc();
       const end = this.httpRequestDurationMs.startTimer({
         method: req.method,
         route: req.path,
@@ -90,12 +106,15 @@ class App {
       });
 
       res.on("finish", () => {
-        end({ status_code: res.statusCode });
+        this.appQueueLength.dec();
+        const status = res.statusCode.toString();
+        end({ status_code: status });
+        this.httpRequestsTotal.inc({ status });
 
         if (res.statusCode >= 400) {
           this.httpErrorCounter.inc({
             route: req.path,
-            status_code: res.statusCode,
+            status_code: status,
             service_name: "product"
           });
         }
@@ -153,6 +172,52 @@ class App {
         timestamp: new Date().toISOString(),
         database: dbStatus,
       });
+    });
+
+    // Forward auth requests to auth service (gateway → product → auth)
+    this.app.use("/auth", async (req, res) => {
+      try {
+        const AUTH_URL = process.env.AUTH_SERVICE_URL || "http://auth:3000";
+        const options = {
+          method: req.method,
+          headers: { "Content-Type": "application/json" },
+        };
+        if (req.headers.authorization) {
+          options.headers["Authorization"] = req.headers.authorization;
+        }
+        if (["POST", "PUT", "PATCH"].includes(req.method)) {
+          options.body = JSON.stringify(req.body);
+        }
+        const response = await fetch(`${AUTH_URL}${req.url}`, options);
+        const data = await response.json();
+        res.status(response.status).json(data);
+      } catch (error) {
+        console.error("Auth forwarding error:", error.message);
+        res.status(502).json({ message: "Auth service unavailable" });
+      }
+    });
+
+    // Forward order requests to order service (gateway → product → order)
+    this.app.use("/orders", async (req, res) => {
+      try {
+        const ORDER_URL = process.env.ORDER_SERVICE_URL || "http://order:3002";
+        const options = {
+          method: req.method,
+          headers: { "Content-Type": "application/json" },
+        };
+        if (req.headers.authorization) {
+          options.headers["Authorization"] = req.headers.authorization;
+        }
+        if (["POST", "PUT", "PATCH"].includes(req.method)) {
+          options.body = JSON.stringify(req.body);
+        }
+        const response = await fetch(`${ORDER_URL}${req.url}`, options);
+        const data = await response.json();
+        res.status(response.status).json(data);
+      } catch (error) {
+        console.error("Order forwarding error:", error.message);
+        res.status(502).json({ message: "Order service unavailable" });
+      }
     });
 
     // Wrap router to capture business metrics

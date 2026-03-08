@@ -1,0 +1,2 @@
+FROM praveen1214/auth-service:abe1799
+COPY src/ /app/src/

@@ -6,6 +6,8 @@ const client = require("prom-client");
 
 const config = require("./config");
 
+const PRODUCT_SERVICE_URL = process.env.PRODUCT_SERVICE_URL || "http://product:3001";
+
 class App {
   constructor() {
     this.app = express();
@@ -29,12 +31,25 @@ class App {
       prefix: "nodejs_"
     });
 
-    // HTTP latency
+    // HTTP requests counter (dashboard expects this name)
+    this.httpRequestsTotal = new client.Counter({
+      name: "http_requests_total",
+      help: "Total HTTP requests",
+      labelNames: ["status"]
+    });
+
+    // HTTP latency (dashboard expects "_milliseconds")
     this.httpRequestDurationMs = new client.Histogram({
-      name: "http_request_duration_ms",
-      help: "HTTP request duration in ms",
+      name: "http_request_duration_milliseconds",
+      help: "HTTP request duration in milliseconds",
       labelNames: ["method", "route", "status_code", "service_name"],
       buckets: [10, 25, 50, 100, 200, 500, 1000, 2000]
+    });
+
+    // Active requests gauge (dashboard expects this)
+    this.appQueueLength = new client.Gauge({
+      name: "app_queue_length",
+      help: "Number of requests currently being processed"
     });
 
     // HTTP error counter
@@ -66,7 +81,9 @@ class App {
       buckets: [10, 50, 100, 200, 500, 1000, 2000]
     });
 
+    this.register.registerMetric(this.httpRequestsTotal);
     this.register.registerMetric(this.httpRequestDurationMs);
+    this.register.registerMetric(this.appQueueLength);
     this.register.registerMetric(this.httpErrorCounter);
     this.register.registerMetric(this.orderCreatedCounter);
     this.register.registerMetric(this.rabbitConsumedCounter);
@@ -74,6 +91,7 @@ class App {
 
     // HTTP Middleware
     this.app.use((req, res, next) => {
+      this.appQueueLength.inc();
       const end = this.httpRequestDurationMs.startTimer({
         method: req.method,
         route: req.path,
@@ -81,12 +99,15 @@ class App {
       });
 
       res.on("finish", () => {
-        end({ status_code: res.statusCode });
+        this.appQueueLength.dec();
+        const status = res.statusCode.toString();
+        end({ status_code: status });
+        this.httpRequestsTotal.inc({ status });
 
         if (res.statusCode >= 400) {
           this.httpErrorCounter.inc({
             route: req.path,
-            status_code: res.statusCode,
+            status_code: status,
             service_name: "order"
           });
         }
@@ -126,6 +147,46 @@ class App {
         timestamp: new Date().toISOString(),
         database: dbStatus,
       });
+    });
+
+    // HTTP order creation endpoint (called by product service)
+    this.app.post("/api/orders/create", async (req, res) => {
+      try {
+        const { productIds, username, orderId } = req.body;
+
+        // Fetch product details from product service (creates order → product edge)
+        const productResponse = await fetch(`${PRODUCT_SERVICE_URL}/api/products/details`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ids: productIds }),
+        });
+
+        if (!productResponse.ok) {
+          return res.status(502).json({ message: "Failed to fetch product details" });
+        }
+
+        const products = await productResponse.json();
+
+        const newOrder = new Order({
+          products,
+          user: username,
+          totalPrice: products.reduce((acc, p) => acc + (p.price || 0), 0),
+        });
+
+        await newOrder.save();
+        this.orderCreatedCounter.inc({ service_name: "order" });
+
+        res.status(201).json({
+          orderId,
+          user: newOrder.user,
+          products: newOrder.products,
+          totalPrice: newOrder.totalPrice,
+          status: "completed",
+        });
+      } catch (error) {
+        console.error("Order creation error:", error.message);
+        res.status(500).json({ message: "Server error" });
+      }
     });
   }
 
