@@ -4,7 +4,7 @@ metadata:
   name: auth
   namespace: ecommerce-test
 spec:
-  replicas: 1 # Single replica for testing
+  replicas: 2 # Single replica for testing
   selector:
     matchLabels:
       app: auth
@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
       - name: auth
-        image: praveen1214/auth-service:d40454b
+        image: praveen1214/auth-service:56f9554
         imagePullPolicy: Always
         ports:
         - containerPort: 3000

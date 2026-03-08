@@ -4,7 +4,7 @@ metadata:
   name: product
   namespace: ecommerce-test
 spec:
-  replicas: 20
+  replicas: 2
   selector:
     matchLabels:
       app: product
@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
       - name: product
-        image: praveen1214/product-service:d40454b
+        image: praveen1214/product-service:56f9554
         imagePullPolicy: Always
         ports:
         - containerPort: 3001
