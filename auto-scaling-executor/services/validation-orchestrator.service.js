@@ -158,10 +158,11 @@ class ValidationOrchestrator {
           wait_ms: chaosWaitMs,
         })
 
-        // Clear the console after 5 seconds (non-blocking)
-        setTimeout(() => console.clear(), 5000)
-
         await sleep(chaosWaitMs)
+
+        // Additional 10-second delay for chaos validation stabilization
+        console.log("⏱️  Waiting 10 seconds for chaos validation stabilization...")
+        await sleep(10000)
 
         // Post-chaos metrics:
         // If you pass post-chaos metrics in payload, use it.

@@ -38,10 +38,12 @@ const startServer = async () => {
   const server = http.createServer(app);
   initSocket(server);
 
-  deploymentHealthService.start();
+  // Deployment health service disabled - only captures on-demand after scaling
+  // deploymentHealthService.start();
 
   server.listen(6000, () => {
     console.log("🚀 Auto Scaling Executor running on port 6000");
+    console.log("📊 Deployment health: Real-time streaming only (no DB storage)");
   });
 };
 

@@ -5,6 +5,8 @@ import K8sExecutor from "./k8s-executor.service.js"
 import MetricsService from "./metrics.service.js"
 import ChaosService from "./chaos.service.js"
 import LoggingService from "./logging.service.js"
+import ChaosExperiment from "../models/chaos-experiment.model.js"
+import eventEmitter from "../utils/events.js"
 
 class ScalingService {
   constructor() {
@@ -231,12 +233,20 @@ class ScalingService {
     // ─────────────────────────────────────────
     const chaosEnabled = mode === "K8S"
     let chaosInjected = false
+    let chaosData = null
     const namespace = process.env.K8S_NAMESPACE || "ecommerce-test"
 
     if (chaosEnabled) {
       try {
-        const { success } = await ChaosService.injectPodFailure(deployment, namespace)
-        chaosInjected = success
+        const chaosResult = await ChaosService.injectPodFailure(deployment, namespace)
+        chaosInjected = chaosResult.success
+        if (chaosInjected) {
+          chaosData = {
+            startTime: chaosResult.startTime,
+            affectedPods: chaosResult.affectedPods,
+            experimentName: chaosResult.experimentName
+          }
+        }
       } catch (e) {
         console.error("Chaos injection error:", e.message)
       }
@@ -248,6 +258,7 @@ class ScalingService {
     }
 
     // We ALWAYS try to clean chaos at the end
+    let validationResult = null
     try {
       // ─────────────────────────────────────────
       // STEP 3 – Validate metrics (payload-based)
@@ -258,6 +269,9 @@ class ScalingService {
 
       const scorePassed = scoreData.score >= this.RESILIENCE_THRESHOLD
       const passed = stability.isStable && scorePassed
+      
+      // Store validation result for chaos experiment logging
+      validationResult = passed
 
       // ─────────────────────────────────────────
       // STEP 4 – LOCAL MODE → NO rollback, only reporting
@@ -369,8 +383,51 @@ class ScalingService {
       return result
     } finally {
       // Always attempt to remove chaos if we injected it
-      if (chaosEnabled && chaosInjected) {
-        await ChaosService.deleteChaos(deployment, namespace)
+      if (chaosEnabled && chaosInjected && chaosData) {
+        const cleanupResult = await ChaosService.deleteChaos(deployment, namespace)
+        
+        // Store chaos experiment data
+        try {
+          const recoveryTimeMs = cleanupResult.endTime - chaosData.startTime
+          const recoveryTimeSeconds = Math.round(recoveryTimeMs / 1000)
+          
+          const experimentId = `exp_${deployment}_${Date.now()}`
+          
+          const chaosExperiment = new ChaosExperiment({
+            experimentId,
+            service: deployment,
+            namespace,
+            faultType: "pod-failure",
+            startTime: chaosData.startTime,
+            endTime: cleanupResult.endTime,
+            durationSeconds: Math.round(this.CHAOS_WAIT_MS / 1000),
+            latencyBefore: 0,
+            latencyDuring: 0,
+            latencyAfter: 0,
+            errorRateBefore: 0,
+            errorRateDuring: 0,
+            errorRateAfter: 0,
+            recoveryTimeSeconds,
+            availabilityDuringChaos: validationResult !== null ? (validationResult ? 100 : 0) : 0,
+            resilienceScore: validationResult !== null ? (validationResult ? 1.0 : 0.0) : 0.5,
+            result: validationResult !== null ? (validationResult ? "PASS" : "FAIL") : "FAIL",
+            createdAt: new Date()
+          })
+          
+          // Add custom fields for the required data
+          chaosExperiment.affectedPodsCount = chaosData.affectedPods
+          chaosExperiment.restartCount = cleanupResult.restartCount
+          chaosExperiment.experimentName = chaosData.experimentName
+          
+          const savedExperiment = await chaosExperiment.save()
+          console.log(`✅ Chaos experiment stored: ${savedExperiment.experimentId}`)
+          
+          // Emit event for SSE
+          eventEmitter.emit("chaos:result", savedExperiment)
+          console.log("📡 Event emitted: chaos:result")
+        } catch (err) {
+          console.error("❌ Failed to store chaos experiment:", err.message)
+        }
       }
     }
   }

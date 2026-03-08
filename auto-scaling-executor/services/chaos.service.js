@@ -13,6 +13,8 @@ class ChaosService {
    * Requires:
    *  - Chaos Mesh installed in the cluster
    *  - infra/chaos/pod-failure-template.yaml present
+   * 
+   * Returns: { success, startTime, affectedPods, experimentName }
    */
   async injectPodFailure(deployment, namespace) {
     // Check if chaos is enabled
@@ -22,6 +24,8 @@ class ChaosService {
     }
 
     const ns = namespace || process.env.K8S_NAMESPACE || "ecommerce-test";
+    const startTime = new Date();
+    const experimentName = `pod-failure-${deployment}`;
 
     try {
       const templatePath = path.join(
@@ -45,8 +49,16 @@ class ChaosService {
       
       await execAsync(cmd);
 
-      console.log(`⚡ Chaos injected for deployment: ${deployment}`);
-      return { success: true };
+      // Get affected pods count
+      const affectedPods = await this.getAffectedPodsCount(deployment, ns);
+
+      console.log(`⚡ Chaos injected for deployment: ${deployment}, affected pods: ${affectedPods}`);
+      return { 
+        success: true, 
+        startTime, 
+        affectedPods,
+        experimentName 
+      };
     } catch (err) {
       console.error("Chaos injection failed:", err.message);
       return { success: false, error: err.message };
@@ -54,16 +66,57 @@ class ChaosService {
   }
 
   /**
+   * Get count of pods affected by chaos
+   */
+  async getAffectedPodsCount(deployment, namespace) {
+    try {
+      const cmd = `kubectl get pods -n ${namespace} -l app=${deployment} --no-headers | wc -l`;
+      const { stdout } = await execAsync(cmd);
+      return parseInt(stdout.trim()) || 0;
+    } catch (err) {
+      console.error("Failed to get affected pods count:", err.message);
+      return 0;
+    }
+  }
+
+  /**
+   * Get restart count for pods in deployment
+   */
+  async getRestartCount(deployment, namespace) {
+    try {
+      const cmd = `kubectl get pods -n ${namespace} -l app=${deployment} -o jsonpath='{range .items[*]}{.status.containerStatuses[*].restartCount}{" "}{end}'`;
+      const { stdout } = await execAsync(cmd);
+      
+      const restarts = stdout.trim().split(/\s+/).filter(Boolean).map(Number);
+      const totalRestarts = restarts.reduce((sum, count) => sum + count, 0);
+      
+      return totalRestarts;
+    } catch (err) {
+      console.error("Failed to get restart count:", err.message);
+      return 0;
+    }
+  }
+
+  /**
    * Delete PodChaos for given deployment (if exists)
+   * Returns: { endTime, restartCount }
    */
   async deleteChaos(deployment, namespace) {
     const ns = namespace || process.env.K8S_NAMESPACE || "ecommerce-test";
+    const endTime = new Date();
+    
     try {
+      // Get restart count before cleaning up
+      const restartCount = await this.getRestartCount(deployment, ns);
+      
       const cmd = `kubectl delete podchaos pod-failure-${deployment} -n ${ns} --ignore-not-found`;
       await execAsync(cmd);
-      console.log(`🧹 Chaos cleared for deployment: ${deployment}`);
+      console.log(`🧹 Chaos cleared for deployment: ${deployment}, restarts: ${restartCount}`);
+      
+      return { endTime, restartCount };
     } catch (err) {
       console.error("Chaos cleanup failed:", err.message);
+      return { endTime, restartCount: 0 };
     }
   }
 }
