@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Prediction Service (ES Module)
  * ================================
  * Connects the ML Prediction API <-> K8s Scaling Executor to form
@@ -12,6 +12,10 @@ import https from "https";
 import http from "http";
 import { emitPredictionEvent } from "../realtime/alert.publisher.js";
 import eventEmitter from "../utils/events.js";
+import ScalingService from "./scaling.service.js";
+import MetricsService from "./metrics.service.js";
+import LoggingService from "./logging.service.js";
+import logger from "../utils/logger.js";
 
 // ============================================================
 // Configuration (read from env)
@@ -20,10 +24,15 @@ import eventEmitter from "../utils/events.js";
 const ML_API_URL = process.env.ML_API_URL
   || "https://mlapi-b3h4fpduauancfcg.southeastasia-01.azurewebsites.net";
 
+const DEFAULT_EXECUTOR_PORT = Number(process.env.PORT || 6000);
 const EXECUTOR_URL = process.env.EXECUTOR_URL
-  || "http://localhost:6000/api/v1/scale-with-metrics";
+  || `http://localhost:${DEFAULT_EXECUTOR_PORT}/api/v1/scale-with-metrics`;
 
-const LOOKBACK = 48; // sliding window size (48 rows × 21 features)
+
+const ML_API_TIMEOUT_MS = Number(process.env.ML_API_TIMEOUT_MS || 30_000);
+const ML_API_RETRIES = Number(process.env.ML_API_RETRIES || 2);
+
+const LOOKBACK = 48; // sliding window size (48 rows Ã— 21 features)
 
 const FEATURE_COLS = [
   "request_rate_rps",          "latency_p95_ms",            "latency_p99_ms",
@@ -69,7 +78,7 @@ function log(level, message) {
 }
 
 // ============================================================
-// 1. HTTP helper — Promise-based (no npm deps)
+// 1. HTTP helper â€” Promise-based (no npm deps)
 // ============================================================
 
 function request(url, { method = "GET", body = null, timeoutMs = 30_000 } = {}) {
@@ -112,6 +121,93 @@ function request(url, { method = "GET", body = null, timeoutMs = 30_000 } = {}) 
     if (body) req.write(JSON.stringify(body));
     req.end();
   });
+}
+
+function toIsoTimestamp(value) {
+  const dt = value ? new Date(value) : new Date();
+  if (Number.isNaN(dt.getTime())) return new Date().toISOString();
+  return dt.toISOString();
+}
+
+function isFiniteNumber(value) {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function parseWindowToNumbers(window = []) {
+  return window.map((row) => row.map((cell) => Number(cell)));
+}
+
+function rowToRawMetrics(row = []) {
+  return {
+    request_rate_rps: row[0],
+    latency_p95_ms: row[1],
+    latency_p99_ms: row[2],
+    error_rate_percent: row[3],
+    queue_length: row[4],
+    pod_cpu_usage_percent_avg: row[5],
+    pod_cpu_usage_percent_p95: row[6],
+    pod_memory_usage_mb_avg: row[7],
+    pod_memory_usage_mb_p95: row[8],
+    current_pod_count: row[20],
+  };
+}
+
+function normalizeRawMetrics(rawMetrics = {}) {
+  const errorPct = Number(rawMetrics.error_rate_percent ?? 0);
+  const errorRate = Math.min(Math.max(errorPct, 0), 1);
+  const successRate = Number((1 - errorRate).toFixed(4));
+
+  const latencyBefore = Number(Number(rawMetrics.latency_p95_ms ?? 0).toFixed(2));
+  const cpuPercent = Number(Number(rawMetrics.pod_cpu_usage_percent_avg ?? 0).toFixed(2));
+  const memPercentRaw = (Number(rawMetrics.pod_memory_usage_mb_p95 ?? 0) / 1024) * 100;
+  const memPercent = Math.min(Number(memPercentRaw.toFixed(2)), 100);
+
+  return {
+    successRate,
+    errorRate: Number(errorRate.toFixed(4)),
+    p95LatencyBefore: latencyBefore,
+    p95LatencyAfter: Number((latencyBefore * 0.6).toFixed(2)),
+    cpuPercent,
+    memPercent,
+    restartCount: 0,
+    trafficRecovery: 0.95,
+  };
+}
+
+async function callPredictWithRetry(windowData, windowEndUtc, serviceId, { timeoutMs = ML_API_TIMEOUT_MS, retries = ML_API_RETRIES, inputSource = "controller" } = {}) {
+  let lastError;
+
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const payload = {
+        window_data: windowData,
+        window_end_utc: windowEndUtc,
+        service_id: serviceId,
+        input_source: inputSource,
+      };
+
+      return await request(`${ML_API_URL}/predict`, {
+        method: "POST",
+        body: payload,
+        timeoutMs,
+      });
+    } catch (err) {
+      lastError = err;
+      if (attempt >= retries) break;
+      const waitMs = 300 * (attempt + 1);
+      logger.warn({
+        event: "PREDICTION_RETRY",
+        service_id: serviceId,
+        attempt: attempt + 1,
+        retries,
+        wait_ms: waitMs,
+        error: err.message,
+      });
+      await sleep(waitMs);
+    }
+  }
+
+  throw lastError;
 }
 
 // ============================================================
@@ -168,7 +264,7 @@ function logPredictionResponse(prediction, context = "") {
 }
 
 // ============================================================
-// 5. Prediction → Executor payload converter
+// 5. Prediction â†’ Executor payload converter
 // ============================================================
 
 function buildExecutorPayload(prediction, rawMetrics) {
@@ -177,32 +273,14 @@ function buildExecutorPayload(prediction, rawMetrics) {
   if (scale_action === "no_change") return null;
 
   const requestPods = Math.abs(predicted_pods - current_pods);
-
-  const errorPct   = parseFloat(rawMetrics.error_rate_percent  ?? 0);
-  const errorRate  = Math.min(Math.max(errorPct / 100.0, 0), 1);
-  const successRate = parseFloat((1.0 - errorRate).toFixed(4));
-
-  const cpuPct = parseFloat(rawMetrics.pod_cpu_usage_percent_avg ?? 0);
-  let   memPct = parseFloat(rawMetrics.pod_memory_usage_mb_p95   ?? 0) / 1024 * 100;
-  memPct = Math.min(parseFloat(memPct.toFixed(2)), 100);
-
-  const latencyBefore = parseFloat(parseFloat(rawMetrics.latency_p95_ms ?? 0).toFixed(2));
+  const metrics = normalizeRawMetrics(rawMetrics);
 
   return {
     services: [{
       deployment:   (prediction.service_id || "Order").toLowerCase(),
       request_pods: requestPods,
       scale_action,
-      metrics: {
-        successRate,
-        errorRate:       parseFloat(errorRate.toFixed(4)),
-        p95LatencyBefore: latencyBefore,
-        p95LatencyAfter:  parseFloat((latencyBefore * 0.6).toFixed(2)),
-        cpuPercent:       parseFloat(cpuPct.toFixed(2)),
-        memPercent:       memPct,
-        restartCount:     0,
-        trafficRecovery:  0.95,
-      },
+      metrics,
     }],
   };
 }
@@ -279,7 +357,7 @@ async function legacyExecuteScalingInProcess(prediction, rawMetrics, dryRun = fa
   return executeScalingHttp(prediction, rawMetrics, dryRun);
 
   if (scale_action === "no_change") {
-    return { status: "skipped", message: "no_change — no scaling needed" };
+    return { status: "skipped", message: "no_change â€” no scaling needed" };
   }
 
   if (dryRun) {
@@ -312,7 +390,7 @@ async function legacyExecuteScalingInProcess(prediction, rawMetrics, dryRun = fa
   };
 
   try {
-    // Call ScalingService directly — same process, no HTTP
+    // Call ScalingService directly â€” same process, no HTTP
     const result = await ScalingService.scaleOneWithMetrics({
       deployment,
       request_pods: requestPods,
@@ -394,7 +472,7 @@ async function validateScaleAction(data, step, originalPrediction, dryRun = fals
     const { windowData, windowEndUtc } = buildWindow(nextRows);
     nextPred = await callPredict(windowData, windowEndUtc, originalPrediction.service_id || "Order");
   } catch (err) {
-    log("WARN", `Validate: ML API call failed — ${err.message}`);
+    log("WARN", `Validate: ML API call failed â€” ${err.message}`);
     return { status: "skipped", message: `ML API error: ${err.message}`, rollbackPayload: null };
   }
 
@@ -406,12 +484,12 @@ async function validateScaleAction(data, step, originalPrediction, dryRun = fals
 
   if (origAction === "no_change") {
     if (nextAction === "no_change") {
-      const reason = `Confirmed: no_change still valid â€” next window predicts no_change (${nextPredPods} pods)`;
-      log("VALIDATE", `âœ“ ${reason}`);
+      const reason = `Confirmed: no_change still valid Ã¢â‚¬â€ next window predicts no_change (${nextPredPods} pods)`;
+      log("VALIDATE", `Ã¢Å“â€œ ${reason}`);
       return { status: "validated", message: reason, rollbackPayload: null };
     }
 
-    const reason = `No-change drift detected â€” next window predicts ${nextAction} (${nextPredPods} pods)`;
+    const reason = `No-change drift detected Ã¢â‚¬â€ next window predicts ${nextAction} (${nextPredPods} pods)`;
     log("WARN", reason);
     return { status: "drift", message: reason, rollbackPayload: null };
   }
@@ -443,8 +521,8 @@ async function validateScaleAction(data, step, originalPrediction, dryRun = fals
       }],
     };
 
-    const reason = `Original action=${origAction} (→${origPredPods} pods) ` +
-                   `but next step says ${nextAction} (→${nextPredPods} pods) — ROLLING BACK`;
+    const reason = `Original action=${origAction} (â†’${origPredPods} pods) ` +
+                   `but next step says ${nextAction} (â†’${nextPredPods} pods) â€” ROLLING BACK`;
 
     log("ROLLBACK", reason);
 
@@ -458,9 +536,9 @@ async function validateScaleAction(data, step, originalPrediction, dryRun = fals
     return { status: "rollback", message: reason, rollbackPayload };
   }
 
-  const reason = `Confirmed: ${origAction} still valid — ` +
+  const reason = `Confirmed: ${origAction} still valid â€” ` +
                  `next window predicts ${nextAction} (${nextPredPods} pods)`;
-  log("VALIDATE", `✓ ${reason}`);
+  log("VALIDATE", `âœ“ ${reason}`);
   return { status: "validated", message: reason, rollbackPayload: null };
 }
 
@@ -525,6 +603,366 @@ async function runSinglePrediction({ serviceId = "Order", dryRun = false, valida
   };
 }
 
+async function processMetricsWindow({
+  serviceId = "Order",
+  timestamp = new Date().toISOString(),
+  window = [],
+  dryRun = false,
+  validate = true,
+  source = "synthetic_window",
+} = {}) {
+  const normalizedServiceId = String(serviceId || "Order");
+  const windowEndUtc = toIsoTimestamp(timestamp);
+
+  if (!Array.isArray(window) || window.length !== LOOKBACK) {
+    throw new Error(`window must contain exactly ${LOOKBACK} rows`);
+  }
+  for (let r = 0; r < window.length; r++) {
+    if (!Array.isArray(window[r]) || window[r].length !== FEATURE_COLS.length + 1) {
+      throw new Error(`window row ${r} must contain exactly ${FEATURE_COLS.length + 1} values`);
+    }
+    for (let c = 0; c < window[r].length; c++) {
+      if (!isFiniteNumber(Number(window[r][c]))) {
+        throw new Error(`window row ${r}, col ${c} must be a finite number`);
+      }
+    }
+  }
+
+  const numericWindow = parseWindowToNumbers(window);
+  const lastRow = numericWindow[numericWindow.length - 1] || [];
+
+  await LoggingService.logPipelineEvent({
+    serviceId: normalizedServiceId,
+    event: "prediction_received",
+    status: "INFO",
+    source,
+    timestamp: new Date(windowEndUtc),
+    details: {
+      rows: numericWindow.length,
+      columns: numericWindow[0]?.length || 0,
+      dryRun,
+      validate,
+    },
+  });
+
+  logger.info({
+    event: "prediction_received",
+    service_id: normalizedServiceId,
+    rows: numericWindow.length,
+    columns: numericWindow[0]?.length || 0,
+    dry_run: dryRun,
+    validate,
+    source,
+  });
+
+  let prediction;
+  try {
+    prediction = await callPredictWithRetry(numericWindow, windowEndUtc, normalizedServiceId, {
+      timeoutMs: ML_API_TIMEOUT_MS,
+      retries: ML_API_RETRIES,
+      inputSource: source,
+    });
+  } catch (err) {
+    await LoggingService.logPipelineEvent({
+      serviceId: normalizedServiceId,
+      event: "prediction_processed",
+      status: "ERROR",
+      source,
+      timestamp: new Date(windowEndUtc),
+      details: { error: err.message },
+      message: "Prediction failed",
+    });
+    throw err;
+  }
+  prediction.window_end_utc = windowEndUtc;
+
+  await LoggingService.logPipelineEvent({
+    serviceId: normalizedServiceId,
+    event: "prediction_processed",
+    status: "SUCCESS",
+    source,
+    timestamp: new Date(windowEndUtc),
+    details: {
+      current_pods: prediction.current_pods,
+      predicted_pods: prediction.predicted_pods,
+      scale_action: prediction.scale_action,
+      latency_ms: prediction.latency_ms,
+    },
+  });
+
+  const deployment = normalizedServiceId.toLowerCase();
+  const rawMetrics = rowToRawMetrics(lastRow);
+  const metrics = normalizeRawMetrics(rawMetrics);
+  const requestPods = Math.max(1, Math.abs(Number(prediction.predicted_pods || 0) - Number(prediction.current_pods || 0)));
+
+  let scalingResult;
+  let validationStatus = null;
+
+  const shouldValidate = Boolean(validate);
+
+  if (prediction.scale_action === "no_change") {
+    await LoggingService.logPipelineEvent({
+      serviceId: normalizedServiceId,
+      event: "validation_skipped",
+      status: "INFO",
+      source,
+      timestamp: new Date(windowEndUtc),
+      details: { reason: shouldValidate ? "scale_action=no_change" : "validate=false", dryRun },
+    });
+
+    if (dryRun && shouldValidate) {
+      const extracted = MetricsService.extractFromPayload(metrics);
+      const stability = MetricsService.evaluateStability(extracted);
+      const scoreData = MetricsService.calculateResilienceScore(extracted);
+      const passed = stability.isStable && scoreData.score >= Number(process.env.RESILIENCE_THRESHOLD || 0.7);
+
+      scalingResult = {
+        deployment,
+        request_pods: 0,
+        scale_action: "no_change",
+        previous_replicas: Number(prediction.current_pods || 0),
+        attempted_additional_replicas: 0,
+        additional_replicas: 0,
+        required_replicas: Number(prediction.current_pods || 0),
+        status: "NO_ACTION_DRY_RUN",
+        message: "Dry-run no_change processed with validation metrics",
+        source,
+        prediction_metadata: {
+          current_pods: Number(prediction.current_pods || 0),
+          predicted_pods: Number(prediction.predicted_pods || 0),
+          ml_latency_ms: Number(prediction.latency_ms || 0),
+          window_end_utc: windowEndUtc,
+        },
+        validation: {
+          ...scoreData,
+          passed,
+          rolledBack: false,
+          skipped: false,
+          threshold: Number(process.env.RESILIENCE_THRESHOLD || 0.7),
+          hardSafetyPassed: stability.isStable,
+          reasons: stability.reasons,
+          metricsEvaluation: stability.evaluations || [],
+          standardsUsed: MetricsService.THRESHOLDS,
+        },
+      };
+      await LoggingService.logScalingResult(scalingResult);
+    } else if (dryRun) {
+      scalingResult = {
+        deployment,
+        request_pods: 0,
+        scale_action: "no_change",
+        previous_replicas: Number(prediction.current_pods || 0),
+        attempted_additional_replicas: 0,
+        additional_replicas: 0,
+        required_replicas: Number(prediction.current_pods || 0),
+        status: "NO_ACTION_DRY_RUN",
+        message: "Dry-run no_change processed (validation disabled)",
+        source,
+        prediction_metadata: {
+          current_pods: Number(prediction.current_pods || 0),
+          predicted_pods: Number(prediction.predicted_pods || 0),
+          ml_latency_ms: Number(prediction.latency_ms || 0),
+          window_end_utc: windowEndUtc,
+        },
+        validation: {
+          passed: null,
+          rolledBack: false,
+          skipped: true,
+          reason: "validate=false",
+        },
+      };
+      await LoggingService.logScalingResult(scalingResult);
+    } else {
+      scalingResult = await ScalingService.scaleOneWithMetrics({
+        deployment,
+        request_pods: 1,
+        scale_action: "no_change",
+        metrics: shouldValidate ? metrics : undefined,
+      });
+      scalingResult.source = source;
+      scalingResult.prediction_metadata = {
+        current_pods: Number(prediction.current_pods || 0),
+        predicted_pods: Number(prediction.predicted_pods || 0),
+        ml_latency_ms: Number(prediction.latency_ms || 0),
+        window_end_utc: windowEndUtc,
+      };
+      // no_change path in ScalingService now logs automatically
+    }
+
+    validationStatus = shouldValidate && scalingResult?.validation?.passed === false ? "failed" : "skipped";
+
+    await LoggingService.logPipelineEvent({
+      serviceId: normalizedServiceId,
+      event: "no_change",
+      status: scalingResult?.status || "NO_ACTION",
+      source,
+      timestamp: new Date(windowEndUtc),
+      details: {
+        message: scalingResult?.message,
+        validation_status: validationStatus,
+      },
+    });
+  } else {
+    await LoggingService.logPipelineEvent(
+      shouldValidate
+        ? {
+            serviceId: normalizedServiceId,
+            event: "validation_triggered",
+            status: "INFO",
+            source,
+            timestamp: new Date(windowEndUtc),
+            details: {
+              action: prediction.scale_action,
+              request_pods: requestPods,
+              dryRun,
+            },
+          }
+        : {
+            serviceId: normalizedServiceId,
+            event: "validation_skipped",
+            status: "INFO",
+            source,
+            timestamp: new Date(windowEndUtc),
+            details: {
+              action: prediction.scale_action,
+              request_pods: requestPods,
+              dryRun,
+              reason: "validate=false",
+            },
+          }
+    );
+
+    if (dryRun && shouldValidate) {
+      const extracted = MetricsService.extractFromPayload(metrics);
+      const stability = MetricsService.evaluateStability(extracted);
+      const scoreData = MetricsService.calculateResilienceScore(extracted);
+      const passed = stability.isStable && scoreData.score >= Number(process.env.RESILIENCE_THRESHOLD || 0.7);
+
+      scalingResult = {
+        deployment,
+        request_pods: requestPods,
+        scale_action: prediction.scale_action,
+        previous_replicas: Number(prediction.current_pods || 0),
+        attempted_additional_replicas: requestPods,
+        additional_replicas: requestPods,
+        required_replicas: Number(prediction.predicted_pods || 0),
+        status: passed ? "DRY_RUN_VALIDATED" : "DRY_RUN_VALIDATION_FAILED",
+        message: "Dry-run scaling validation completed (no real scaling executed)",
+        source,
+        prediction_metadata: {
+          current_pods: Number(prediction.current_pods || 0),
+          predicted_pods: Number(prediction.predicted_pods || 0),
+          ml_latency_ms: Number(prediction.latency_ms || 0),
+          window_end_utc: windowEndUtc,
+        },
+        validation: {
+          ...scoreData,
+          passed,
+          rolledBack: false,
+          skipped: false,
+          threshold: Number(process.env.RESILIENCE_THRESHOLD || 0.7),
+          hardSafetyPassed: stability.isStable,
+          reasons: stability.reasons,
+          metricsEvaluation: stability.evaluations || [],
+          standardsUsed: MetricsService.THRESHOLDS,
+        },
+      };
+      await LoggingService.logScalingResult(scalingResult);
+    } else if (dryRun) {
+      scalingResult = {
+        deployment,
+        request_pods: requestPods,
+        scale_action: prediction.scale_action,
+        previous_replicas: Number(prediction.current_pods || 0),
+        attempted_additional_replicas: requestPods,
+        additional_replicas: requestPods,
+        required_replicas: Number(prediction.predicted_pods || 0),
+        status: "DRY_RUN_NO_VALIDATION",
+        message: "Dry-run scaling processed (validation disabled)",
+        source,
+        prediction_metadata: {
+          current_pods: Number(prediction.current_pods || 0),
+          predicted_pods: Number(prediction.predicted_pods || 0),
+          ml_latency_ms: Number(prediction.latency_ms || 0),
+          window_end_utc: windowEndUtc,
+        },
+        validation: {
+          passed: null,
+          rolledBack: false,
+          skipped: true,
+          reason: "validate=false",
+        },
+      };
+      await LoggingService.logScalingResult(scalingResult);
+    } else {
+      scalingResult = await ScalingService.scaleOneWithMetrics({
+        deployment,
+        request_pods: requestPods,
+        metrics: shouldValidate ? metrics : undefined,
+        scale_action: prediction.scale_action,
+      });
+      scalingResult.source = source;
+      scalingResult.prediction_metadata = {
+        current_pods: Number(prediction.current_pods || 0),
+        predicted_pods: Number(prediction.predicted_pods || 0),
+        ml_latency_ms: Number(prediction.latency_ms || 0),
+        window_end_utc: windowEndUtc,
+      };
+    }
+
+    validationStatus = shouldValidate
+      ? (
+          scalingResult?.validation?.rolledBack
+            ? "rolled_back"
+            : (scalingResult?.validation?.passed ? "validated" : "failed")
+        )
+      : "skipped";
+
+    await LoggingService.logPipelineEvent({
+      serviceId: normalizedServiceId,
+      event: "scale_executed",
+      status: scalingResult?.status || "UNKNOWN",
+      source,
+      timestamp: new Date(windowEndUtc),
+      details: {
+        action: prediction.scale_action,
+        request_pods: requestPods,
+        validation_status: validationStatus,
+        required_replicas: scalingResult?.required_replicas,
+      },
+    });
+  }
+
+  const predictionEvent = {
+    deployment,
+    current_pods: Number(prediction.current_pods || 0),
+    predicted_pods: Number(prediction.predicted_pods || 0),
+    scale_action: prediction.scale_action,
+    ml_latency_ms: Number(prediction.latency_ms || 0),
+    window_end_utc: windowEndUtc,
+    executor_status: scalingResult?.status || "NO_ACTION",
+    dry_run: dryRun,
+    validation_status: validationStatus,
+    source,
+  };
+  try { emitPredictionEvent(predictionEvent); } catch (e) { /* swallow */ }
+  eventEmitter.emit("prediction:result", predictionEvent);
+
+  return {
+    prediction: {
+      current_pods: Number(prediction.current_pods || 0),
+      predicted_pods: Number(prediction.predicted_pods || 0),
+      scale_action: prediction.scale_action,
+      latency_ms: Number(prediction.latency_ms || 0),
+      service_id: normalizedServiceId,
+      window_end_utc: windowEndUtc,
+    },
+    scaling_result: scalingResult,
+    dry_run: dryRun,
+    source,
+  };
+}
+
 // ============================================================
 // 9. Controller loop (runs in background)
 // ============================================================
@@ -548,7 +986,7 @@ async function runControllerLoop({
   console.log();
   console.log("=".repeat(76));
   console.log("  SMART RESOURCE ALLOCATION CONTROLLER (embedded)");
-  console.log("  ML Prediction API  ←→  K8s Scaling Executor (HTTP)");
+  console.log("  ML Prediction API  â†â†’  K8s Scaling Executor (HTTP)");
   console.log("=".repeat(76));
   console.log(`  ML API:     ${ML_API_URL}`);
   console.log(`  Executor:   ${EXECUTOR_URL}`);
@@ -591,9 +1029,9 @@ async function runControllerLoop({
   };
 
   const actionDisplay = {
-    scale_up:   `\x1b[91m▲ SCALE UP\x1b[0m  `,
-    scale_down: `\x1b[92m▼ SCALE DOWN\x1b[0m`,
-    no_change:  `\x1b[90m— NO CHANGE\x1b[0m `,
+    scale_up:   `\x1b[91mâ–² SCALE UP\x1b[0m  `,
+    scale_down: `\x1b[92mâ–¼ SCALE DOWN\x1b[0m`,
+    no_change:  `\x1b[90mâ€” NO CHANGE\x1b[0m `,
   };
 
   const hdr = `  ${"Step".padEnd(6)} ${"Time (sim)".padEnd(22)} ${"Curr".padEnd(6)} ${"Pred".padEnd(6)} ` +
@@ -604,7 +1042,7 @@ async function runControllerLoop({
   // Main loop
   for (let step = 0; step < totalSteps; step++) {
     if (stopRequested) {
-      log("INFO", "Stop requested — ending controller loop");
+      log("INFO", "Stop requested â€” ending controller loop");
       break;
     }
 
@@ -618,7 +1056,7 @@ async function runControllerLoop({
     try {
       prediction = await callPredict(windowData, windowEndUtc, serviceId);
     } catch (err) {
-      log("ERROR", `Step ${step + 1}: ML API failed — ${err.message}`);
+      log("ERROR", `Step ${step + 1}: ML API failed â€” ${err.message}`);
       continue;
     }
 
@@ -632,7 +1070,7 @@ async function runControllerLoop({
     stats.predictions++;
     stats.latencies.push(latency);
 
-    let execResult = "—";
+    let execResult = "â€”";
     let executorStatus = null;
     let validationStatus = null;
 
@@ -682,10 +1120,10 @@ async function runControllerLoop({
         stats.validation_checks++;
         if (vresult.status === "validated") {
           stats.validated++;
-          execResult += " ✓valid";
+          execResult += " âœ“valid";
         } else if (vresult.status === "rollback") {
           stats.rollbacks++;
-          execResult += " ↩rollback";
+          execResult += " â†©rollback";
         }
       }
     }
@@ -783,6 +1221,9 @@ const PredictionService = {
   /** Run a single on-demand prediction */
   runSinglePrediction,
 
+  /** Process external 48x21 metric windows (dashboard synthetic load) */
+  processMetricsWindow,
+
   /** Start the background prediction loop */
   startLoop: runControllerLoop,
 
@@ -811,3 +1252,4 @@ const PredictionService = {
 };
 
 export default PredictionService;
+

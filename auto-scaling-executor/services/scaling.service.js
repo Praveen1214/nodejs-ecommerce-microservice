@@ -105,7 +105,7 @@ class ScalingService {
     if (scale_action === "no_change") {
       const previousReplicas = await K8sExecutor.getCurrentReplicas(deployment)
       if (mode === "K8S" && previousReplicas === null) {
-        return {
+        const result = {
           deployment,
           request_pods,
           scale_action: "no_change",
@@ -122,8 +122,10 @@ class ScalingService {
             reason: "Kubernetes replica lookup failed",
           },
         }
+        await LoggingService.logScalingResult(result)
+        return result
       }
-      return {
+      const result = {
         deployment,
         request_pods,
         scale_action: "no_change",
@@ -140,6 +142,8 @@ class ScalingService {
           reason: "scale_action set to no_change",
         },
       }
+      await LoggingService.logScalingResult(result)
+      return result
     }
 
     // Calculate pods based on scale_action

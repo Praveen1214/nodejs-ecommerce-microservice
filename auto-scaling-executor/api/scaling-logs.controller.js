@@ -29,7 +29,7 @@ router.get("/scaling-events/stream", async (req, res) => {
         const { all, page = 1, limit = 50 } = req.query;
         
         let query = ScalingLog.find()
-            .select("deployment scale_action status previous_replicas required_replicas timestamp")
+            .select("deployment scale_action status previous_replicas required_replicas source pipeline_event pipeline_details message timestamp")
             .sort({ timestamp: -1 });
 
         // If all=true, don't apply pagination
@@ -56,6 +56,9 @@ router.get("/scaling-events/stream", async (req, res) => {
             previous_replicas: savedLog.previous_replicas,
             required_replicas: savedLog.required_replicas,
             source: savedLog.source || "manual",
+            pipeline_event: savedLog.pipeline_event || null,
+            pipeline_details: savedLog.pipeline_details || null,
+            message: savedLog.message || null,
             prediction_metadata: savedLog.prediction_metadata || null,
             timestamp: savedLog.timestamp
         };
