@@ -30,6 +30,9 @@ const router = express.Router()
  *    }
  */
 router.post("/scale-with-metrics", async (req, res) => {
+  console.log(`\n[${new Date().toLocaleTimeString()}] 📥 RECEIVED SCALING REQUEST from UI`);
+  console.log(JSON.stringify(req.body, null, 2));
+
   try {
     const body = req.body
 

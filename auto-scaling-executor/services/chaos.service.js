@@ -70,9 +70,10 @@ class ChaosService {
    */
   async getAffectedPodsCount(deployment, namespace) {
     try {
-      const cmd = `kubectl get pods -n ${namespace} -l app=${deployment} --no-headers | wc -l`;
+      const cmd = `kubectl get pods -n ${namespace} -l app=${deployment} --no-headers -o name`;
       const { stdout } = await execAsync(cmd);
-      return parseInt(stdout.trim()) || 0;
+      const lines = stdout.trim().split(/\r?\n/).filter(Boolean);
+      return lines.length;
     } catch (err) {
       console.error("Failed to get affected pods count:", err.message);
       return 0;
