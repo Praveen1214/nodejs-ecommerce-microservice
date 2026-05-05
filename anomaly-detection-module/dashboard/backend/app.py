@@ -140,8 +140,9 @@ def _load_models():
     except Exception as e: print(f"[WARN] SVM: {e}")
     try:
         import tensorflow as tf
-        mp = os.path.join(MODEL_DIR, "autoencoder_model.keras")
-        if not os.path.exists(mp): mp = os.path.join(MODEL_DIR, "autoencoder_model.h5")
+        mp = os.path.join(MODEL_DIR, "autoencoder_model.h5")
+        # mp = os.path.join(MODEL_DIR, "autoencoder_model.keras")
+        # if not os.path.exists(mp): mp = os.path.join(MODEL_DIR, "autoencoder_model.h5")
         ae = tf.keras.models.load_model(mp, compile=False)
         s,t = _pkl("autoencoder_scaler.pkl"), _pkl("autoencoder_threshold.pkl")
         def _ae(X, ae=ae, s=s, t=t):

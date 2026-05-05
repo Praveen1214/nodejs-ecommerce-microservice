@@ -18,10 +18,10 @@ from tensorflow import keras
 from tensorflow.keras import layers
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.abspath(os.path.join(BASE_DIR, "../../../"))
+PROJECT_ROOT = os.path.abspath(os.path.join(BASE_DIR, "../../"))
 sys.path.insert(0, PROJECT_ROOT)
 
-DATASET_PATH = os.path.join(PROJECT_ROOT, "datasets/dataset.csv")
+DATASET_PATH = os.path.join(PROJECT_ROOT, "data/raw/dataset.csv")
 MODEL_DIR = os.path.join(PROJECT_ROOT, "results/models/v4")
 METRICS_DIR = os.path.join(PROJECT_ROOT, "results/v4")
 os.makedirs(MODEL_DIR, exist_ok=True)
@@ -95,11 +95,11 @@ def main():
     print(f"Anomaly threshold (95th pct): {threshold:.6f}")
 
     # Save
-    model_path = os.path.join(MODEL_DIR, "autoencoder_model.keras")
+    model_path = os.path.join(MODEL_DIR, "autoencoder_model.h5")
     scaler_path = os.path.join(MODEL_DIR, "autoencoder_scaler.pkl")
     threshold_path = os.path.join(MODEL_DIR, "autoencoder_threshold.pkl")
 
-    autoencoder.save(model_path)
+    autoencoder.save(model_path.replace(".keras", ".h5"))
     with open(scaler_path, "wb") as f:
         pickle.dump(scaler, f)
     with open(threshold_path, "wb") as f:
