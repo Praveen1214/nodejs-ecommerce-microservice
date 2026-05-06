@@ -1,6 +1,5 @@
-## -------------------------------------------------------
+
 ## 1. Scrape istiod control-plane metrics (port http-monitoring = 15014)
-## -------------------------------------------------------
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
@@ -18,11 +17,7 @@ spec:
     - port: http-monitoring
       interval: 15s
 ---
-## -------------------------------------------------------
 ## 2. Scrape envoy sidecar proxies in ecommerce-test pods
-##    Each Istio sidecar exposes metrics on port 15090 (http-envoy-prom)
-##    Selects pods with Istio sidecar via tlsMode label
-## -------------------------------------------------------
 apiVersion: monitoring.coreos.com/v1
 kind: PodMonitor
 metadata:
